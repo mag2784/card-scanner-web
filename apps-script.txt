@@ -1,0 +1,171 @@
+/**
+ * Card Scanner: Google Sheet sync
+ *
+ * Keeps your card binders safe in this spreadsheet. The app sends the
+ * whole collection here after every change and reads it back after a reinstall.
+ *
+ * Setup: Extensions > Apps Script, paste this whole file over the sample code, save,
+ * then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
+ * Copy the Web app URL (ends in /exec) into the app: Binders > Back up.
+ */
+
+// Leave empty. The first app that connects picks a secret code, and from then on only
+// requests with that code are accepted. (The code is part of the link on the "Setup" tab.)
+const SYNC_CODE = '';
+
+const DATA_TAB = '_data';     // hidden tab with the raw collection (used for restores)
+const SETUP_TAB = 'Setup';
+const CHUNK = 40000;          // characters per cell (Sheets allows 50,000)
+
+function doPost(e) {
+  let req;
+  try {
+    req = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return reply({ ok: false, error: 'Bad request' });
+  }
+  if (!codeOk(req.key)) return reply({ ok: false, error: 'Wrong sync code. Use the link from the Setup tab of your sheet.' });
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    if (req.action === 'load') {
+      writeSetup();
+      return reply({ ok: true, library: loadLibrary() });
+    }
+    if (req.action === 'save') {
+      saveLibrary(req.library);
+      writeBinderTabs(req.library);
+      writeSetup();
+      return reply({ ok: true, savedAt: new Date().toISOString() });
+    }
+    return reply({ ok: false, error: 'Unknown action' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function codeOk(key) {
+  if (SYNC_CODE) return key === SYNC_CODE;
+  const props = PropertiesService.getScriptProperties();
+  const saved = props.getProperty('SYNC_CODE');
+  if (!saved) {
+    if (!key || String(key).length < 16) return false;
+    props.setProperty('SYNC_CODE', String(key));
+    return true;
+  }
+  return key === saved;
+}
+
+function currentCode() {
+  return SYNC_CODE || PropertiesService.getScriptProperties().getProperty('SYNC_CODE') || '';
+}
+
+function doGet() {
+  return ContentService.createTextOutput('Card Scanner sync is running.');
+}
+
+function reply(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ---------- Raw data (for restoring the app) ----------
+
+function saveLibrary(library) {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(DATA_TAB) || ss.insertSheet(DATA_TAB);
+  const text = JSON.stringify(library || { collections: [] });
+  const rows = [];
+  // Each chunk starts with "x" so Sheets never treats it as a number, date or formula.
+  for (let i = 0; i < text.length; i += CHUNK) rows.push(['x' + text.slice(i, i + CHUNK)]);
+  sh.clear();
+  const range = sh.getRange(1, 1, rows.length, 1);
+  range.setNumberFormat('@');
+  range.setValues(rows);
+  if (!sh.isSheetHidden() && ss.getSheets().length > 1) sh.hideSheet();
+}
+
+function loadLibrary() {
+  const sh = SpreadsheetApp.getActive().getSheetByName(DATA_TAB);
+  if (!sh || sh.getLastRow() === 0) return null;
+  const text = sh.getRange(1, 1, sh.getLastRow(), 1).getValues()
+    .map(function (r) { return String(r[0]).slice(1); })
+    .join('');
+  return JSON.parse(text);
+}
+
+// ---------- Readable tabs, one per binder ----------
+
+function writeBinderTabs(library) {
+  const ss = SpreadsheetApp.getActive();
+  const collections = (library && library.collections) || [];
+
+  collections.forEach(function (c, index) {
+    const sh = ss.getSheetByName(c.name) || ss.insertSheet(c.name, index);
+    sh.clear();
+    sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearFormat();
+
+    const cards = (c.cards || []).slice().sort(function (a, b) {
+      return (b.price || 0) * b.quantity - (a.price || 0) * a.quantity;
+    });
+
+    sh.getRange('A1').setValue(c.name + "'s binder").setFontSize(18).setFontWeight('bold');
+    sh.getRange('A2:F2').setValues([['Total value', '=SUM(I5:I)', 'Cards', '=SUM(G5:G)', 'Updated', new Date()]]);
+    sh.getRange('B2').setNumberFormat('$#,##0.00').setFontWeight('bold');
+    sh.getRange('F2').setNumberFormat('mmm d, yyyy h:mm am/pm');
+
+    const header = ['Picture', 'Card', 'Set', 'Number', 'Rarity', 'Version', 'Qty',
+      'Price each', 'Total', 'Price when added', 'Change', 'Added', 'Card ID', 'Europe price (€)'];
+    sh.getRange(4, 1, 1, header.length).setValues([header])
+      .setFontWeight('bold').setBackground('#ECE8FF');
+    sh.setFrozenRows(4);
+
+    if (cards.length) {
+      const rows = cards.map(function (e) {
+        const number = e.number ? (e.setTotal ? e.number + '/' + e.setTotal : e.number) : '';
+        return [
+          e.imageSmall ? '=IMAGE("' + e.imageSmall + '")' : '',
+          e.name, e.setName || '', number, e.rarity || '', e.variant || '',
+          e.quantity,
+          e.price == null ? '' : e.price,
+          e.price == null ? '' : e.price * e.quantity,
+          e.priceWhenAdded == null ? '' : e.priceWhenAdded,
+          (e.price == null || e.priceWhenAdded == null) ? '' : e.price - e.priceWhenAdded,
+          new Date(e.addedAt),
+          e.cardId,
+          e.price == null && e.priceEur != null ? e.priceEur : '',
+        ];
+      });
+      sh.getRange(5, 4, rows.length, 1).setNumberFormat('@');   // keep "28/131" as text
+      sh.getRange(5, 1, rows.length, header.length).setValues(rows);
+      sh.getRange(5, 8, rows.length, 4).setNumberFormat('$#,##0.00');
+      sh.getRange(5, 12, rows.length, 1).setNumberFormat('mmm d, yyyy');
+      sh.getRange(5, 14, rows.length, 1).setNumberFormat('€#,##0.00');
+      sh.setRowHeights(5, rows.length, 90);
+    }
+    sh.setColumnWidth(1, 70);
+    sh.autoResizeColumns(2, header.length - 1);
+  });
+
+  // Remove the blank starter tab once the binder tabs exist
+  const starter = ss.getSheetByName('Sheet1');
+  if (starter && starter.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(starter);
+}
+
+// ---------- Setup tab with the sync link ----------
+
+function writeSetup() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName(SETUP_TAB) || ss.insertSheet(SETUP_TAB);
+  const link = ScriptApp.getService().getUrl() + '?key=' + currentCode();
+  sh.getRange('A1:A6').setValues([
+    ['Card Scanner sync'],
+    ['Sync link (paste this into the app: Binders > Back up):'],
+    [link],
+    [''],
+    ['After reinstalling the app, paste the same link and it will restore the binders.'],
+    ['Keep this link private: anyone with it can change the binders.'],
+  ]);
+  sh.getRange('A1').setFontSize(16).setFontWeight('bold');
+  sh.setColumnWidth(1, 700);
+}
