@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.4';
+const APP_VERSION = '1.5';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -141,38 +141,56 @@ function tcgcsvGroupData(groupId) {
   return backup.groupData.get(groupId);
 }
 
+/** Plain-words reason for a failed request, for the "Checked for a US price" line. */
+function errText(e) {
+  if (!e) return 'unknown error';
+  if (e.name === 'AbortError') return 'timed out';
+  if (e.name === 'TypeError') return 'the browser was not allowed to read it, or the network is down';
+  return e.message || String(e);
+}
+
 async function tcgcsvPrice(card) {
-  if (!card.number || !card.setName) return null;
+  if (!card.number || !card.setName) return { prices: null, note: 'not enough to look up (no set name or number)' };
   const groups = pickGroups(await tcgcsvGroups(), card.setName, card.setId);
+  if (!groups.length) return { prices: null, note: `no set called "${card.setName}"` };
   for (const g of groups.slice(0, 2)) {
     const data = await tcgcsvGroupData(g.groupId);
     const product = pickProduct(data.products, card);
     if (!product) continue;
     const prices = pricesForProduct(data.prices, product.productId);
-    if (prices.length) return prices;
+    if (prices.length) return { prices, note: null };
+    return { prices: null, note: `found the card (product ${product.productId}) but it has no price yet` };
   }
-  return null;
+  return { prices: null, note: `found the set (${groups.map(g => g.name).join(', ')}) but not ${card.name} #${card.number} in it` };
 }
 
 async function ptcgPrice(card) {
-  if (!card.number) return null;
+  if (!card.number) return { prices: null, note: 'no card number to look up' };
   const url = `${PTCG}/cards?q=${encodeURIComponent(ptcgQuery(card))}&select=name,number,set,tcgplayer&pageSize=6`;
   const list = (await (await fetchTimeout(url, 9000)).json()).data || [];
   const hit = list.find(c => c.tcgplayer && nameScore(c.name, [card.name]) >= 0.9);
-  return hit ? ptcgPrices(hit.tcgplayer) : null;
+  return hit ? { prices: ptcgPrices(hit.tcgplayer), note: null } : { prices: null, note: 'no matching card' };
 }
 
-/** Looks for a dollar price outside TCGdex. Returns { prices, source } or null. */
+/**
+ * Looks for a dollar price outside TCGdex. Always returns { prices, source, notes }: prices is null when nothing was
+ * found, and notes says what each source answered, so the screen can show why.
+ */
 async function backupPrice(card) {
-  const tries = [['TCGplayer (via tcgcsv.com)', tcgcsvPrice], ['pokemontcg.io', ptcgPrice]];
-  for (const [name, fn] of tries) {
-    if (Date.now() - (backup.failedAt[name] || 0) < 5 * 60 * 1000) continue;
+  const tries = [['TCGplayer copy', 'TCGplayer (via tcgcsv.com)', tcgcsvPrice], ['pokemontcg.io', 'pokemontcg.io', ptcgPrice]];
+  const notes = [];
+  for (const [label, name, fn] of tries) {
+    if (Date.now() - (backup.failedAt[name] || 0) < 5 * 60 * 1000) { notes.push(`${label}: skipped, it failed a moment ago`); continue; }
     try {
-      const prices = await fn(card);
-      if (prices && prices.length) return { prices, source: name };
-    } catch (e) { backup.failedAt[name] = Date.now(); }
+      const r = await fn(card);
+      if (r && r.prices && r.prices.length) return { prices: r.prices, source: name, notes };
+      notes.push(`${label}: ${(r && r.note) || 'no match'}`);
+    } catch (e) {
+      backup.failedAt[name] = Date.now();
+      notes.push(`${label}: couldn't connect (${errText(e)})`);
+    }
   }
-  return null;
+  return { prices: null, source: null, notes };
 }
 
 /** On the results screen: fill in a missing price in the background, then redraw. */
@@ -181,7 +199,7 @@ function kickBackup(card) {
   if (card.priceState === 'pending' || (card.priceCheckedAt && Date.now() - card.priceCheckedAt < 30 * 60 * 1000)) return;
   card.priceState = 'pending';
   backupPrice(card)
-    .then(found => { if (found) { card.prices = found.prices; card.priceSource = found.source; } })
+    .then(found => { if (found.prices) { card.prices = found.prices; card.priceSource = found.source; } else card.priceNotes = found.notes; })
     .catch(() => {})
     .finally(() => {
       card.priceState = 'done';
@@ -768,6 +786,11 @@ function renderDock() {
 }
 
 /** The price area of a result: real prices, a spinner, an estimate from euros, the user's own price, or nothing. */
+function notesHtml(card) {
+  return card.priceNotes && card.priceNotes.length && !card.prices.length
+    ? `<p class="small muted" style="margin:8px 0 0">Checked for a US price: ${card.priceNotes.map(esc).join('; ')}.</p>` : '';
+}
+
 function priceHtml(card, prices, vIdx, variant) {
   if (variant) {
     return `
@@ -796,18 +819,21 @@ function priceHtml(card, prices, vIdx, variant) {
       <div class="price-label">Estimated price</div>
       <div class="price">≈ ${usd(euros * fx.rate)}</div>
       <p class="small muted" style="margin:4px 0 0">Converted from ${eur(euros)} (Cardmarket, Europe). No US price was found.</p>
+      ${notesHtml(card)}
       <button class="text-btn" data-action="manual-price">Enter a price yourself</button>`;
   }
   if (euros != null) {
     return `
       <div class="price-label">Cardmarket price (Europe)</div>
       <div class="price">${eur(euros)}</div>
+      ${notesHtml(card)}
       <button class="text-btn" data-action="manual-price">Enter a US price yourself</button>`;
   }
   return `
     <div class="tile" style="margin-top:18px">${card.lang !== 'en'
       ? "No price found. Japanese and Chinese cards often aren't tracked by the price sites."
       : "No price found. Very new cards sometimes aren't in the price feeds yet, but TCGplayer may have one."}</div>
+    ${notesHtml(card)}
     <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="manual-price">Enter price yourself</button>`;
 }
 
@@ -1071,7 +1097,7 @@ async function refreshPrices(binderId) {
         const card = toCard(await fetchJSON(`${API}/${lang}/cards/${encodeURIComponent(id)}`), lang);
         if (card && lang === 'en' && !card.prices.length) {
           const found = await backupPrice(card);
-          if (found) { card.prices = found.prices; card.priceSource = found.source; }
+          if (found.prices) { card.prices = found.prices; card.priceSource = found.source; }
         }
         return [`${lang}/${id}`, card];
       } catch (e) { return [null, null]; }
