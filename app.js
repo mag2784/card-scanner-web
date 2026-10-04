@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.6';
+const APP_VERSION = '1.7';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -313,6 +313,7 @@ const store = {
       c.cards.push({
         key, cardId: card.id, name: card.name, setName: card.setName, number: card.number,
         setTotal: card.setTotal, rarity: card.rarity, imageSmall: card.imageSmall, imageLarge: card.imageLarge,
+        group: card.group || null, kind: card.kind || null,
         variant: variant ? variant.label : null, quantity: 1, addedAt: now,
         priceWhenAdded: price, price, priceUpdatedAt: now,
         ...(real == null && card.manualPrice != null ? { priceManual: true } : {}),
@@ -645,19 +646,21 @@ function onRead(read) {
 
   // Name veto: the card clearly says a name none of this number's cards have
   if (usable && strong && agrees && !agrees.length) return search({ name: strong, number, total });
-  if (chosen) return showCandidates(found.cards, chosen, found.setMatched, numberText);
+  if (chosen) return showCandidates(found.cards, chosen, found.setMatched, numberText, { name: chosen.name, number, total });
   if (votes.framesLocked <= 2) return;   // give the name a moment
-  if (usable) return showCandidates(found.cards, null, false, numberText);
+  if (usable) return showCandidates(found.cards, null, false, numberText, { name: strong || null, number, total });
   if (strong) return search({ name: strong, number, total });
   if (app.lang !== 'en') return search({ name: null, number, total });
   resetVotes();
-  setScan({ state: 'notfound', label: numberText });
+  setScan({ state: 'notfound', label: numberText, read: { name: strong || null, number, total } });
 }
 
-async function runLookup(label, fn) {
+async function runLookup(label, fn, read) {
   setScan({ state: 'searching', label });
   try {
-    setScan(await fn());
+    const r = await fn();
+    if (read && r) r.read = read;
+    setScan(r);
   } catch (e) {
     setScan({ state: 'error', message: e.message || 'Something went wrong. Try again.' });
   }
@@ -687,7 +690,7 @@ function searchLocal(hit, p) {
     }
     const cards = briefs.length ? await cardDetails(briefs.slice().reverse().slice(0, 8)) : [];
     return identifiedResults(cat, { name: hit.locals[0], number: p.number, total: p.total }, cards);
-  });
+  }, { name: hit.english, number: p.number || null, total: p.total || null });
 }
 
 function search(p, typed = false) {
@@ -703,16 +706,16 @@ function search(p, typed = false) {
     if (!cards.length) return other ? identifiedResults(cat, p, []) : { state: 'notfound', label };
     if (other && !exact) return identifiedResults(cat, p, cards);       // add "not listed" as the last choice
     return { state: 'results', cards, selectedId: cards[0].id, exact, variantIdx: 0 };
-  });
+  }, { name: p.name || null, number: p.number || null, total: p.total || null });
 }
 
-function showCandidates(cands, chosen, exact, label) {
+function showCandidates(cands, chosen, exact, label, read) {
   return runLookup(chosen ? chosen.name : label, async () => {
     const others = cands.filter(c => c !== chosen).reverse();
     const cards = await cardDetails([...(chosen ? [chosen] : []), ...others].slice(0, 8));
     if (!cards.length) return { state: 'notfound', label };
     return { state: 'results', cards, selectedId: cards[0].id, exact: exact && !!chosen, variantIdx: 0 };
-  });
+  }, read);
 }
 
 async function scanLoop() {
@@ -754,6 +757,36 @@ function renderLang() {
     `<button data-action="lang" data-lang="${k}" aria-pressed="${k === app.lang}">${esc(l.label)}</button>`).join('');
 }
 
+/** "Wrong name or number? Edit and search again" */
+function editReadHtml() {
+  const s = app.scan, r = s.read || { name: null, number: null, total: null };
+  if (!s.editing) return '<button class="text-btn" data-action="edit-read" style="margin-top:6px">Wrong name or number? Edit and search again</button>';
+  return `<form class="edit-read" data-form="edit-read" autocomplete="off">
+    <label class="small muted">Name<input class="field" name="cardname" value="${esc(r.name || '')}" placeholder="${app.lang === 'en' ? 'for example Pikachu' : 'English name, for example Dragonair'}"></label>
+    <div class="row" style="margin-top:8px;align-items:flex-end">
+      <label class="small muted grow">Card number<input class="field" name="cardnumber" value="${esc(r.number || '')}" placeholder="28"></label>
+      <span class="muted" style="padding-bottom:14px">of</span>
+      <label class="small muted grow">Set size<input class="field" name="cardtotal" value="${esc(r.total || '')}" placeholder="131"></label>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="btn btn-primary grow" type="submit">Search again</button><button class="btn btn-outline" type="button" data-action="edit-read-cancel">Cancel</button></div>
+  </form>`;
+}
+
+/** Typed search / edited read: English names work in Japanese and Chinese mode, and typos are fixed to real card names. */
+async function runTypedSearch(p) {
+  if (!p.name && !p.number) return;
+  if (app.lang !== 'en' && p.name && !hasCjk(p.name)) {
+    const api = await species.load();
+    const hit = api && api.localNamesFor(p.name, app.lang);
+    if (hit) return searchLocal(hit, p);
+  }
+  try {
+    const cat = await catalogs[app.lang].load();
+    if (p.name) p.name = cat.resolveName(p.name) || p.name;   // "pickachu" -> "Pikachu"
+  } catch (e) { /* search() reports it */ }
+  search(p, true);
+}
+
 function renderDock() {
   const s = app.scan;
   const dock = $('#dock');
@@ -780,7 +813,8 @@ function renderDock() {
     dock.innerHTML = `
       <h2 class="display">${s.state === 'notfound' ? 'No match yet' : 'Lookup hiccup'}</h2>
       <p style="font-size:17px">${body}</p>
-      <button class="btn btn-primary btn-block" data-action="rescan">${s.state === 'notfound' ? 'Scan again' : 'Try again'}</button>`;
+      ${s.state === 'notfound' ? editReadHtml() : ''}
+      <button class="btn btn-primary btn-block" style="margin-top:12px" data-action="rescan">${s.state === 'notfound' ? 'Scan again' : 'Try again'}</button>`;
   } else if (s.state === 'results') {
     dock.innerHTML = resultHtml();
   }
@@ -870,9 +904,10 @@ function resultHtml() {
         ${en ? `<div class="muted">English: <b>${esc(en)}</b></div>` : ''}
         ${card.setName ? `<div><b>${esc(card.setName)}</b></div>` : (card.setNames && card.setNames.length > 1 ? `<div class="muted">One of the ${card.setTotal}-card sets: ${esc(card.setNames.join(' or '))}</div>` : '')}
         ${numberText ? `<div class="muted">${numberText}</div>` : ''}
-        ${card.rarity ? `<span class="badge">${esc(card.rarity)}</span>` : ''}
+        ${card.rarity ? `<span class="badge">${esc(card.rarity)}</span>` : ''}${card.kind ? `<span class="badge alt">${esc(card.kind)}</span>` : ''}
       </div>
     </div>
+    ${editReadHtml()}
     ${price}
     ${cmParts.length ? `<p style="margin:12px 0 0">Cardmarket (Europe): ${cmParts.join(', ')}</p>` : ''}
     ${card.priceSource ? `<p class="small muted" style="margin:4px 0 0">Price from ${esc(card.priceSource)}. TCGdex had none for this card.</p>`
@@ -888,7 +923,7 @@ function resultHtml() {
     <h3>Add to a binder</h3>
     ${prices.length > 1 && variant ? `<div class="small muted">Adds the ${esc(variant.label)} version. Pick a different one with the buttons above.</div>` : ''}
     <div class="add-row">${store.collections.map((c, i) =>
-      `<button class="btn" style="background:${BINDER_COLORS[i % BINDER_COLORS.length]}" data-action="add" data-binder="${esc(c.id)}">Add to ${esc(c.name)}</button>`).join('')}
+      `<button class="btn" style="background:${BINDER_COLORS[i % BINDER_COLORS.length]}" data-action="add" data-binder="${esc(c.id)}">${Celebrate.avatar(Celebrate.whoIs(c.name)) ? `<img class="av" src="${Celebrate.avatar(Celebrate.whoIs(c.name))}" alt="">` : ''}Add to ${esc(c.name)}</button>`).join('')}
     </div>
     ${owned.length ? `<p style="margin:8px 0 0"><b>${owned.join(' and ')} of this card.</b></p>` : ''}
 
@@ -1281,6 +1316,8 @@ document.addEventListener('click', async ev => {
     catalogs[app.lang].load().catch(() => {});
   }
   else if (a === 'rescan') setScan({ state: 'scanning' });
+  else if (a === 'edit-read') { s.editing = true; renderDock(); }
+  else if (a === 'edit-read-cancel') { s.editing = false; renderDock(); }
   else if (a === 'variant' && app.detail) { app.detail.variantIdx = Number(el.dataset.i); renderDetails(); }
   else if (a === 'variant') { s.variantIdx = Number(el.dataset.i); renderDock(); }
   else if (a === 'manual-price' && app.detail) {
@@ -1307,6 +1344,7 @@ document.addEventListener('click', async ev => {
     const b = store.collections.find(c => c.id === el.dataset.binder);
     toast(`Added to ${b ? b.name : 'binder'}`);
     renderDock();
+    Celebrate.show({ binder: b && b.name, card, tier: BinderUI.tierOf(card.rarity) });
   }
   else if (a === 'check-update') {
     toast('Checking for updates…');
@@ -1372,16 +1410,12 @@ document.addEventListener('submit', async ev => {
     form.q.blur();
     const p = parseQuery(q);
     if (!p.name && !p.number) return;
-    if (app.lang !== 'en' && p.name && !hasCjk(p.name)) {
-      const api = await species.load();
-      const hit = api && api.localNamesFor(p.name, app.lang);
-      if (hit) return searchLocal(hit, p);
-    }
-    try {
-      const cat = await catalogs[app.lang].load();
-      if (p.name) p.name = cat.resolveName(p.name) || p.name;   // "pickachu" -> "Pikachu"
-    } catch (e) { /* search() reports it */ }
-    search(p, true);
+    runTypedSearch(p);
+  } else if (form.dataset.form === 'edit-read') {
+    const f = new FormData(form);
+    const name = String(f.get('cardname') || '').trim(), num = String(f.get('cardnumber') || '').trim(), tot = String(f.get('cardtotal') || '').trim();
+    if (!name && !num) { toast('Type a name or a card number'); return; }
+    runTypedSearch({ name: name || null, number: num ? normalizeNumber(num) : null, total: tot ? normalizeNumber(tot) : null });
   } else if (form.dataset.form === 'connect') {
     const btn = form.querySelector('button');
     btn.disabled = true; btn.textContent = 'Connecting…';

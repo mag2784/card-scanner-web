@@ -95,6 +95,9 @@ function isHeaderWord(word) {
 
 // ---------- matching names to candidate cards ----------
 
+/** Names compared without accents, curly quotes or case: "Poké Ball" = "poke ball", "Boss’s Orders" = "boss's orders". */
+const nameKey = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[’‘´`]/g, "'").replace(/[–—]/g, '-').toLowerCase().trim();
+
 const SUFFIX = /[\s-]+(ex|gx|v|vmax|vstar|break|prime|lv\.?\s?x|star|δ)$/i;
 const CJK_SUFFIX = /([^\x00-\x7F])(ex|gx|v|vmax|vstar)$/i;
 
@@ -167,7 +170,7 @@ const setIdOf = b => (b.id || '').slice(0, (b.id || '').lastIndexOf('-'));
 /** Builds lookup indexes from TCGdex brief cards (tagged with lang) and sets. */
 function buildCatalog(cards, sets) {
   const names = new Map();
-  for (const b of cards) if (b.name) names.set(b.name.toLowerCase(), b.name);
+  for (const b of cards) if (b.name) names.set(nameKey(b.name), b.name);
   const byLen = new Map();
   for (const k of names.keys()) {
     if (!byLen.has(k.length)) byLen.set(k.length, []);
@@ -205,7 +208,7 @@ function buildCatalog(cards, sets) {
     },
     /** Closest real card name to what OCR read, or null. */
     resolveName(raw) {
-      const key = String(raw || '').toLowerCase().trim();
+      const key = nameKey(raw);
       if (!key) return null;
       if (names.has(key)) return names.get(key);
       const cjk = hasCjk(key);
@@ -233,16 +236,23 @@ function nameFromLine(cat, line) {
     t = [...t].filter(ch => isCjk(ch) || /[A-Za-z0-9]/.test(ch)).join('');
     for (let len = Math.min(t.length, 12); len >= 2; len--) {
       for (let i = 0; i + len <= t.length; i++) {
-        const hit = cat.names.get(t.slice(i, i + len).toLowerCase());
+        const hit = cat.names.get(nameKey(t.slice(i, i + len)));
         if (hit) return hit;
       }
     }
     return t.length >= 3 ? cat.resolveName(t) : null;
   }
-  const words = line
-    .replace(/[^A-Za-zÀ-ÿ'’.\-♀♂ ]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 2 && !isHeaderWord(w));
+  const raw = line.replace(/[^A-Za-zÀ-ÿ'’.\-♀♂ ]/g, ' ').split(/\s+/).filter(Boolean);
+  // First, real names exactly as printed, header words included: "Basic Fire Energy", "Boss's Orders", "Ultra Ball"
+  for (let n = Math.min(5, raw.length); n >= 1; n--) {
+    for (let i = 0; i + n <= raw.length; i++) {
+      const s = raw.slice(i, i + n).join(' ');
+      if (nameKey(s).length < 3) continue;
+      const hit = cat.names.get(nameKey(s));
+      if (hit) return hit;
+    }
+  }
+  const words = raw.filter(w => w.length >= 2 && !isHeaderWord(w));
   for (let n = Math.min(3, words.length); n >= 1; n--) {
     for (let i = 0; i + n <= words.length; i++) {
       const s = words.slice(i, i + n).join(' ');
@@ -274,9 +284,13 @@ function toCard(r, lang) {
     .filter(([, v]) => v && typeof v === 'object')
     .map(([k, v]) => ({ label: variantLabel(k), market: pos(v.marketPrice), low: pos(v.lowPrice), high: pos(v.highPrice) }))
     : [];
+  const group = r.category === 'Trainer' ? 'Trainer' : r.category === 'Energy' ? 'Energy' : (r.category || r.hp) ? 'Pokémon' : null;
+  const kind = group === 'Trainer' ? (r.trainerType || 'Trainer') : group === 'Energy' ? (r.energyType ? `${r.energyType} Energy` : 'Energy')
+    : group === 'Pokémon' ? (r.stage || 'Pokémon') : null;
   return {
     id: r.id,
     name: r.name,
+    group, kind,
     number: r.localId ? normalizeNumber(r.localId) : null,
     setName: (r.set && r.set.name) || null,
     setId: (r.set && r.set.id) || null,
@@ -494,6 +508,6 @@ if (typeof module !== 'undefined') {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
-    stripCardSuffix, makeSpecies, identifiedCard, isIdentified,
+    stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
   };
 }
