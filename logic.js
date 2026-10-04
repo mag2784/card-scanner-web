@@ -254,10 +254,11 @@ const VARIANT_LABELS = {
 };
 const variantLabel = k => VARIANT_LABELS[k] || (k.charAt(0).toUpperCase() + k.slice(1).replace(/-/g, ' '));
 
+const pos = v => (typeof v === 'number' && v > 0 ? v : null);
+
 /** TCGdex full card -> what the app shows. */
 function toCard(r, lang) {
   if (!r || !r.id || !r.name) return null;
-  const pos = v => (typeof v === 'number' && v > 0 ? v : null);
   const tp = (r.pricing && r.pricing.tcgplayer) || null;
   const cm = (r.pricing && r.pricing.cardmarket) || null;
   const prices = tp ? Object.entries(tp)
@@ -269,6 +270,7 @@ function toCard(r, lang) {
     name: r.name,
     number: r.localId ? normalizeNumber(r.localId) : null,
     setName: (r.set && r.set.name) || null,
+    setId: (r.set && r.set.id) || null,
     setTotal: (r.set && r.set.cardCount && r.set.cardCount.official) || null,
     rarity: r.rarity || null,
     imageSmall: r.image ? r.image + '/low.png' : null,
@@ -332,9 +334,92 @@ function rarityRank(r) {
   return 0;
 }
 
+
+// ---------- backup price sources (used only when TCGdex has no TCGplayer price) ----------
+
+const TCGCSV = 'https://tcgcsv.com/tcgplayer';   // nightly copy of TCGplayer's catalog; category 3 = Pokémon (English)
+const PTCG = 'https://api.pokemontcg.io/v2';
+
+const SUBTYPE_LABELS = {
+  'normal': 'Normal', 'holofoil': 'Holofoil', 'reverse holofoil': 'Reverse holo',
+  '1st edition holofoil': '1st Edition holo', '1st edition normal': '1st Edition', '1st edition': '1st Edition',
+  'unlimited holofoil': 'Unlimited holo', 'unlimited': 'Unlimited', 'unlimited normal': 'Unlimited',
+};
+const subtypeLabel = s => SUBTYPE_LABELS[String(s || '').toLowerCase()] || String(s || 'Normal');
+
+const PTCG_LABELS = {
+  normal: 'Normal', holofoil: 'Holofoil', reverseHolofoil: 'Reverse holo', '1stEditionHolofoil': '1st Edition holo',
+  '1stEditionNormal': '1st Edition', unlimitedHolofoil: 'Unlimited holo', unlimited: 'Unlimited',
+};
+
+/** "SV: Scarlet & Violet 151" and "Scarlet & Violet 151" both become "scarlet violet 151". */
+function normSet(s) {
+  return String(s || '').toLowerCase().replace(/^[^:]*:\s*/, '').replace(/&/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** TCGplayer "groups" (sets) matching a card's set, by name first and then by set code. */
+function pickGroups(groups, setName, setId) {
+  const want = normSet(setName);
+  const id = String(setId || '').toLowerCase();
+  const byName = want ? groups.filter(g => normSet(g.name) === want) : [];
+  if (byName.length) return byName;
+  return id ? groups.filter(g => String(g.abbreviation || '').toLowerCase() === id) : [];
+}
+
+const productNumber = p => {
+  const x = (p.extendedData || []).find(e => e.name === 'Number' || e.displayName === 'Card Number');
+  return x ? String(x.value || '') : '';
+};
+
+/** The TCGplayer product for this card: same collector number and name, plain printing preferred. */
+function pickProduct(products, card) {
+  const want = String(card.number || '');
+  if (!want) return null;
+  const matches = products.filter(p => {
+    const n = productNumber(p);
+    if (!n) return false;
+    return normalizeNumber(n.split('/')[0].trim()) === want &&
+      nameScore(p.cleanName || p.name || '', [card.name]) >= 0.9;
+  });
+  const totalOf = p => parseInt((productNumber(p).split('/')[1] || '').trim(), 10);
+  const rank = p => (/\(/.test(p.name || '') ? 0 : 2) + (card.setTotal && totalOf(p) === card.setTotal ? 1 : 0);
+  matches.sort((a, b) => rank(b) - rank(a));
+  return matches[0] || null;
+}
+
+/** Price rows for one TCGplayer product -> the app's price list (one entry per printing). */
+function pricesForProduct(rows, productId) {
+  return rows
+    .filter(r => r.productId === productId)
+    .map(r => ({ label: subtypeLabel(r.subTypeName), market: pos(r.marketPrice), low: pos(r.lowPrice), high: pos(r.highPrice) }))
+    .filter(p => p.market != null || p.low != null);
+}
+
+/** pokemontcg.io's tcgplayer block -> the app's price list. */
+function ptcgPrices(tp) {
+  if (!tp || !tp.prices) return [];
+  return Object.entries(tp.prices)
+    .filter(([, v]) => v && typeof v === 'object')
+    .map(([k, v]) => ({ label: PTCG_LABELS[k] || k, market: pos(v.market), low: pos(v.low), high: pos(v.high) }))
+    .filter(p => p.market != null || p.low != null);
+}
+
+function ptcgQuery(card) {
+  return [`name:"${String(card.name).replace(/"/g, '')}"`, `number:${card.number}`,
+    card.setTotal ? `set.printedTotal:${card.setTotal}` : ''].filter(Boolean).join(' ');
+}
+
+/** What someone typed as a dollar amount: "$93", "93.5", "1,200" -> number, or null. */
+function parseMoney(input) {
+  if (input == null) return null;
+  const n = Number(String(input).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) && n > 0 && n < 1e6 ? Math.round(n * 100) / 100 : null;
+}
+
 if (typeof module !== 'undefined') {
   module.exports = {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
+    normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
   };
 }

@@ -30,6 +30,13 @@ opened. "Check for updates" at the bottom of the scanner forces a refresh.
 In the app: **Binders › Back up** walks through it. Each family uses their own Google
 Sheet; the script is `apps-script.txt` (the app has a Copy button for it).
 
+## Prices
+
+Prices come from TCGdex. If TCGdex has no US price for an English card, the app checks a nightly
+copy of TCGplayer's data (tcgcsv.com) and then pokemontcg.io. Cards that only have a European
+(Cardmarket) price show an approximate dollar amount using the day's exchange rate. If nothing is
+found, you can type in a price yourself; it's replaced automatically once a real price appears.
+
 ## Files
 
 | File | What it does |

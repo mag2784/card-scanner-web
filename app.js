@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.0';
+const APP_VERSION = '1.1';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -74,6 +74,120 @@ async function fetchJSON(url, tries = 3) {
     if (res.status >= 500 && i < tries - 1) { await sleep(700 * (i + 1)); continue; }
     throw new Error(`The card database returned an error (HTTP ${res.status}). Try again in a minute.`);
   }
+}
+
+async function fetchTimeout(url, ms = 8000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res;
+  } finally { clearTimeout(timer); }
+}
+
+// ---------- euro → dollar rate (for cards that only have a Cardmarket price) ----------
+const fx = {
+  rate: null, at: 0,
+  init() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('fx') || 'null');
+      if (saved && saved.rate > 0) { this.rate = saved.rate; this.at = saved.at || 0; }
+    } catch (e) { /* no saved rate */ }
+    if (Date.now() - this.at > 12 * 3600 * 1000) this.refresh();
+  },
+  async refresh() {
+    const sources = [
+      'https://api.frankfurter.dev/v1/latest?base=EUR&symbols=USD',
+      'https://api.frankfurter.app/latest?from=EUR&to=USD',
+      'https://open.er-api.com/v6/latest/EUR',
+    ];
+    for (const url of sources) {
+      try {
+        const data = await (await fetchTimeout(url, 6000)).json();
+        const rate = Number(data && data.rates && data.rates.USD);
+        if (rate > 0.5 && rate < 2.5) {
+          this.rate = rate; this.at = Date.now();
+          localStorage.setItem('fx', JSON.stringify({ rate, at: this.at }));
+          if (app.view === 'binders') renderBinders();
+          else if (app.scan.state === 'results') renderDock();
+          return;
+        }
+      } catch (e) { /* try the next source */ }
+    }
+  },
+};
+
+// ---------- backup price sources ----------
+// Used only when TCGdex has no TCGplayer price for an English card. Each source is optional:
+// if one is down or blocked, it is skipped for a few minutes and the next one is tried.
+const backup = { failedAt: {}, groups: null, groupData: new Map() };
+
+function tcgcsvGroups() {
+  if (!backup.groups) {
+    backup.groups = fetchTimeout(`${TCGCSV}/3/groups`, 12000).then(r => r.json()).then(j => j.results || [])
+      .catch(e => { backup.groups = null; throw e; });
+  }
+  return backup.groups;
+}
+
+function tcgcsvGroupData(groupId) {
+  if (!backup.groupData.has(groupId)) {
+    const get = what => fetchTimeout(`${TCGCSV}/3/${groupId}/${what}`, 25000).then(r => r.json()).then(j => j.results || []);
+    backup.groupData.set(groupId, Promise.all([get('products'), get('prices')])
+      .then(([products, prices]) => ({ products, prices }))
+      .catch(e => { backup.groupData.delete(groupId); throw e; }));
+  }
+  return backup.groupData.get(groupId);
+}
+
+async function tcgcsvPrice(card) {
+  if (!card.number || !card.setName) return null;
+  const groups = pickGroups(await tcgcsvGroups(), card.setName, card.setId);
+  for (const g of groups.slice(0, 2)) {
+    const data = await tcgcsvGroupData(g.groupId);
+    const product = pickProduct(data.products, card);
+    if (!product) continue;
+    const prices = pricesForProduct(data.prices, product.productId);
+    if (prices.length) return prices;
+  }
+  return null;
+}
+
+async function ptcgPrice(card) {
+  if (!card.number) return null;
+  const url = `${PTCG}/cards?q=${encodeURIComponent(ptcgQuery(card))}&select=name,number,set,tcgplayer&pageSize=6`;
+  const list = (await (await fetchTimeout(url, 9000)).json()).data || [];
+  const hit = list.find(c => c.tcgplayer && nameScore(c.name, [card.name]) >= 0.9);
+  return hit ? ptcgPrices(hit.tcgplayer) : null;
+}
+
+/** Looks for a dollar price outside TCGdex. Returns { prices, source } or null. */
+async function backupPrice(card) {
+  const tries = [['TCGplayer (via tcgcsv.com)', tcgcsvPrice], ['pokemontcg.io', ptcgPrice]];
+  for (const [name, fn] of tries) {
+    if (Date.now() - (backup.failedAt[name] || 0) < 5 * 60 * 1000) continue;
+    try {
+      const prices = await fn(card);
+      if (prices && prices.length) return { prices, source: name };
+    } catch (e) { backup.failedAt[name] = Date.now(); }
+  }
+  return null;
+}
+
+/** On the results screen: fill in a missing price in the background, then redraw. */
+function kickBackup(card) {
+  if (!card || card.lang !== 'en' || card.prices.length) return;
+  if (card.priceState === 'pending' || (card.priceCheckedAt && Date.now() - card.priceCheckedAt < 30 * 60 * 1000)) return;
+  card.priceState = 'pending';
+  backupPrice(card)
+    .then(found => { if (found) { card.prices = found.prices; card.priceSource = found.source; } })
+    .catch(() => {})
+    .finally(() => {
+      card.priceState = 'done';
+      card.priceCheckedAt = Date.now();
+      if (app.view === 'scan' && app.scan.state === 'results' && app.scan.selectedId === card.id) renderDock();
+    });
 }
 
 async function cachedList(key, url) {
@@ -159,12 +273,14 @@ const store = {
     const now = Date.now();
     if (existing) existing.quantity += 1;
     else {
-      const price = variant ? variant.market : marketPrice(card, null);
+      const real = variant && variant.market != null ? variant.market : marketPrice(card, null);
+      const price = real ?? card.manualPrice ?? null;
       c.cards.push({
         key, cardId: card.id, name: card.name, setName: card.setName, number: card.number,
         setTotal: card.setTotal, rarity: card.rarity, imageSmall: card.imageSmall, imageLarge: card.imageLarge,
         variant: variant ? variant.label : null, quantity: 1, addedAt: now,
-        priceWhenAdded: price ?? null, price: price ?? null, priceUpdatedAt: now,
+        priceWhenAdded: price, price, priceUpdatedAt: now,
+        ...(real == null && card.manualPrice != null ? { priceManual: true } : {}),
         language: card.lang, priceEur: eurPrice(card), priceEurWhenAdded: eurPrice(card),
       });
     }
@@ -183,8 +299,18 @@ const store = {
     for (const c of this.collections) for (const e of c.cards) {
       const card = fresh.get(`${e.language || 'en'}/${e.cardId}`);
       if (!card) continue;
-      e.price = marketPrice(card, e.variant) ?? e.price;
-      e.priceEur = eurPrice(card) ?? e.priceEur;
+      const real = marketPrice(card, e.variant);
+      if (real != null) {
+        // A real price replaces one the user typed in; restart the "change since added" from it
+        if (e.priceManual || e.priceWhenAdded == null) e.priceWhenAdded = real;
+        e.price = real;
+        delete e.priceManual;
+      }
+      const eurNow = eurPrice(card);
+      if (eurNow != null) {
+        e.priceEur = eurNow;
+        if (e.priceEurWhenAdded == null) e.priceEurWhenAdded = eurNow;
+      }
       e.rarity = card.rarity || e.rarity;
       e.priceUpdatedAt = now;
     }
@@ -201,8 +327,15 @@ const store = {
 /** "Harper" -> "Harper's binder"; "My binder" stays "My binder". */
 const binderTitle = name => (/binder$/i.test(name) ? name : `${name}'s binder`);
 
-const total = c => c.cards.reduce((s, e) => s + (e.price || 0) * e.quantity, 0);
-const totalEurOnly = c => c.cards.filter(e => e.price == null).reduce((s, e) => s + (e.priceEur || 0) * e.quantity, 0);
+/** Dollar value of a binder entry: the US price, or the euro price converted at today's rate. */
+const isConverted = e => e.price == null && e.priceEur != null && !!fx.rate;
+const usdOf = e => (e.price != null ? e.price : isConverted(e) ? e.priceEur * fx.rate : null);
+const total = c => c.cards.reduce((s, e) => s + (usdOf(e) || 0) * e.quantity, 0);
+/** How much of a binder's total came from converted euro prices. */
+const convertedPart = c => c.cards.filter(isConverted).reduce(
+  (a, e) => ({ usd: a.usd + e.priceEur * fx.rate * e.quantity, eur: a.eur + e.priceEur * e.quantity }), { usd: 0, eur: 0 });
+const totalEurNoRate = c => c.cards.filter(e => e.price == null && e.priceEur != null && !fx.rate)
+  .reduce((s, e) => s + e.priceEur * e.quantity, 0);
 const count = c => c.cards.reduce((s, e) => s + e.quantity, 0);
 
 // ---------- Google Sheet backup ----------
@@ -544,6 +677,7 @@ function setScan(s) {
   if (s.state === 'results' && app.scan.state !== 'results') buzz();
   app.scan = s;
   if (s.state === 'scanning') { resetVotes(); setLive(''); }
+  if (s.state === 'results') kickBackup(s.cards.find(c => c.id === s.selectedId));
   renderDock();
 }
 
@@ -584,18 +718,10 @@ function renderDock() {
   }
 }
 
-function resultHtml() {
-  const s = app.scan;
-  const card = s.cards.find(c => c.id === s.selectedId) || s.cards[0];
-  const prices = card.prices;
-  const vIdx = Math.min(s.variantIdx || 0, Math.max(0, prices.length - 1));
-  const variant = prices[vIdx] || null;
-  const eurOnly = !prices.length ? eurPrice(card) : null;
-  const numberText = card.number ? `Card ${esc(card.number)}${card.setTotal ? ` of ${card.setTotal}` : ''}` : '';
-
-  let price = '';
+/** The price area of a result: real prices, a spinner, an estimate from euros, the user's own price, or nothing. */
+function priceHtml(card, prices, vIdx, variant) {
   if (variant) {
-    price = `
+    return `
       ${prices.length > 1 ? `<div class="chips" style="margin-top:18px">${prices.map((p, i) =>
         `<button class="chip-btn" data-action="variant" data-i="${i}" aria-pressed="${i === vIdx}">${esc(p.label)}</button>`).join('')}</div>` : ''}
       <div class="price-label">${prices.length === 1 ? esc(variant.label) + ' market price' : 'Market price'}</div>
@@ -604,13 +730,47 @@ function resultHtml() {
         <div class="tile"><span>Lowest listing</span><b>${usd(variant.low)}</b></div>
         <div class="tile"><span>Highest listing</span><b>${usd(variant.high)}</b></div>
       </div>`;
-  } else if (eurOnly != null) {
-    price = `<div class="price-label">Cardmarket price (Europe)</div><div class="price">${eur(eurOnly)}</div>`;
-  } else {
-    price = `<div class="tile" style="margin-top:18px">${card.lang !== 'en'
-      ? "No price for this card. Japanese and Chinese cards often aren't tracked by the price sites."
-      : 'No price yet. Brand-new cards can take a few days to get one; tap TCGplayer to see listings.'}</div>`;
   }
+  if (card.priceState === 'pending') {
+    return `<div class="tile" style="margin-top:18px;display:flex;gap:12px;align-items:center"><div class="spinner"></div><span>Checking other sources for a dollar price…</span></div>`;
+  }
+  const euros = eurPrice(card);
+  if (card.manualPrice != null) {
+    return `
+      <div class="price-label">Your price</div>
+      <div class="price">${usd(card.manualPrice)}</div>
+      <p class="small muted" style="margin:4px 0 0">You entered this. It's used until a price site has one.</p>
+      <button class="text-btn" data-action="manual-price">Change my price</button>`;
+  }
+  if (euros != null && fx.rate) {
+    return `
+      <div class="price-label">Estimated price</div>
+      <div class="price">≈ ${usd(euros * fx.rate)}</div>
+      <p class="small muted" style="margin:4px 0 0">Converted from ${eur(euros)} (Cardmarket, Europe). No US price was found.</p>
+      <button class="text-btn" data-action="manual-price">Enter a price yourself</button>`;
+  }
+  if (euros != null) {
+    return `
+      <div class="price-label">Cardmarket price (Europe)</div>
+      <div class="price">${eur(euros)}</div>
+      <button class="text-btn" data-action="manual-price">Enter a US price yourself</button>`;
+  }
+  return `
+    <div class="tile" style="margin-top:18px">${card.lang !== 'en'
+      ? "No price found. Japanese and Chinese cards often aren't tracked by the price sites."
+      : "No price found. Very new cards sometimes aren't in the price feeds yet, but TCGplayer may have one."}</div>
+    <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="manual-price">Enter price yourself</button>`;
+}
+
+function resultHtml() {
+  const s = app.scan;
+  const card = s.cards.find(c => c.id === s.selectedId) || s.cards[0];
+  const prices = card.prices;
+  const vIdx = Math.min(s.variantIdx || 0, Math.max(0, prices.length - 1));
+  const variant = prices[vIdx] || null;
+  const numberText = card.number ? `Card ${esc(card.number)}${card.setTotal ? ` of ${card.setTotal}` : ''}` : '';
+
+  const price = priceHtml(card, prices, vIdx, variant);
   const cmParts = [card.cmTrend != null && `${eur(card.cmTrend)} trend`, card.cmAvg30 != null && `${eur(card.cmAvg30)} 30-day average`,
     card.cmTrendHolo != null && `${eur(card.cmTrendHolo)} holo trend`].filter(Boolean);
 
@@ -634,7 +794,8 @@ function resultHtml() {
     </div>
     ${price}
     ${cmParts.length ? `<p style="margin:12px 0 0">Cardmarket (Europe): ${cmParts.join(', ')}</p>` : ''}
-    ${card.tcgUpdated ? `<p class="small muted" style="margin:4px 0 0">TCGplayer prices from ${esc(card.tcgUpdated)}</p>` : ''}
+    ${card.priceSource ? `<p class="small muted" style="margin:4px 0 0">Price from ${esc(card.priceSource)}. TCGdex had none for this card.</p>`
+      : card.tcgUpdated ? `<p class="small muted" style="margin:4px 0 0">TCGplayer prices from ${esc(card.tcgUpdated)}</p>` : ''}
 
     ${s.cards.length > 1 ? `
       <h3>${s.exact ? 'Other possible matches' : 'Which one is yours?'}</h3>
@@ -651,7 +812,7 @@ function resultHtml() {
     ${owned.length ? `<p style="margin:8px 0 0"><b>${owned.join(' and ')} of this card.</b></p>` : ''}
 
     <div class="row" style="margin-top:22px">
-      <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.tcgplayer.com/search/pokemon/product?q=${q}">TCGplayer</a>
+      <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.tcgplayer.com/search/pokemon/product?q=${q}">${!prices.length && card.manualPrice == null ? 'See price on TCGplayer' : 'TCGplayer'}</a>
       <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(card.name)}">Cardmarket</a>
     </div>
     <button class="btn btn-primary btn-block" style="margin-top:10px" data-action="rescan">Scan another card</button>`;
@@ -665,16 +826,26 @@ function currentBinder() {
   return cur;
 }
 
-function priceText(e) { return e.price != null ? usd(e.price) : e.priceEur != null ? eur(e.priceEur) : 'No price'; }
+function priceText(e) {
+  if (e.price != null) return usd(e.price);
+  if (isConverted(e)) return '≈ ' + usd(e.priceEur * fx.rate);
+  if (e.priceEur != null) return eur(e.priceEur);
+  return 'No price';
+}
 
+/** ▲ / ▼ since the card was added, in the same currency the price is shown in. */
 function priceChange(e) {
-  const useEur = e.price == null;
-  const now = useEur ? e.priceEur : e.price, then = useEur ? e.priceEurWhenAdded : e.priceWhenAdded;
+  let now, then, f = usd, tilde = '';
+  if (e.price != null) { now = e.price; then = e.priceWhenAdded; }
+  else if (isConverted(e)) {
+    now = e.priceEur * fx.rate;
+    then = e.priceEurWhenAdded != null ? e.priceEurWhenAdded * fx.rate : null;
+    tilde = '≈ ';
+  } else { now = e.priceEur; then = e.priceEurWhenAdded; f = eur; }
   if (now == null || then == null) return '';
   const d = now - then;
   if (Math.abs(d) < 0.01) return '';
-  const f = useEur ? eur : usd;
-  return d > 0 ? `<div class="up">▲ ${f(d)}</div>` : `<div class="down">▼ ${f(-d)}</div>`;
+  return d > 0 ? `<div class="up">▲ ${tilde}${f(d)}</div>` : `<div class="down">▼ ${tilde}${f(-d)}</div>`;
 }
 
 function renderBinders() {
@@ -685,7 +856,7 @@ function renderBinders() {
   const color = BINDER_COLORS[idx % BINDER_COLORS.length];
 
   let list = cur.cards.filter(e => !app.rarity || (e.rarity || 'Unknown') === app.rarity);
-  const val = e => (e.price ?? e.priceEur ?? 0) * e.quantity;
+  const val = e => (usdOf(e) ?? 0) * e.quantity;
   if (app.sort === 'value') list = list.slice().sort((a, b) => val(b) - val(a));
   if (app.sort === 'rarity') list = list.slice().sort((a, b) => rarityRank(b.rarity) - rarityRank(a.rarity) || val(b) - val(a));
   if (app.sort === 'newest') list = list.slice().sort((a, b) => b.addedAt - a.addedAt);
@@ -694,11 +865,12 @@ function renderBinders() {
   const rarities = {};
   for (const e of cur.cards) rarities[e.rarity || 'Unknown'] = (rarities[e.rarity || 'Unknown'] || 0) + e.quantity;
   const rarityChips = Object.entries(rarities).sort((a, b) => rarityRank(b[0]) - rarityRank(a[0]));
-  const top = cur.cards.slice().sort((a, b) => (b.price || 0) - (a.price || 0))[0];
+  const top = cur.cards.slice().sort((a, b) => (usdOf(b) || 0) - (usdOf(a) || 0))[0];
   const unique = new Set(cur.cards.map(e => e.cardId)).size;
   const n = count(cur);
   const oldest = cur.cards.length ? Math.min(...cur.cards.map(e => e.priceUpdatedAt || 0)) : null;
-  const eurExtra = totalEurOnly(cur);
+  const conv = convertedPart(cur);
+  const eurNoRate = totalEurNoRate(cur);
 
   view.innerHTML = `
     <div class="b-header" style="background:${color}">
@@ -717,9 +889,10 @@ function renderBinders() {
       <div class="card-box">
         <div class="muted"><b>${esc(binderTitle(cur.name))} is worth</b></div>
         <div class="price">${usd(total(cur))}</div>
-        ${eurExtra > 0 ? `<div class="up" style="font-size:16px">Plus ${eur(eurExtra)} in cards with only European prices</div>` : ''}
+        ${conv.eur > 0 ? `<div class="small muted">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
+        ${eurNoRate > 0 ? `<div class="up" style="font-size:16px">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
         <div style="font-size:17px">${n} card${n === 1 ? '' : 's'}, ${unique} different</div>
-        ${top && top.price ? `<div>Top card: ${esc(top.name)}, ${usd(top.price)}</div>` : ''}
+        ${top && usdOf(top) ? `<div>Top card: ${esc(top.name)}, ${isConverted(top) ? '≈ ' : ''}${usd(usdOf(top))}</div>` : ''}
         ${cur.cards.length ? `
           <div class="row" style="margin-top:6px">
             <span class="grow small muted">TCGplayer market prices, updated ${timeAgo(oldest)}</span>
@@ -751,6 +924,7 @@ function renderBinders() {
               ${e.quantity > 1 ? `<span class="qty">×${e.quantity}</span>` : ''}</div>
             <div class="nm">${esc(e.name)}</div>
             <div class="pr">${priceText(e)}</div>
+            ${e.priceManual ? '<div class="small muted">your price</div>' : ''}
             ${priceChange(e)}
           </button>`).join('')}
         </div>`}
@@ -778,7 +952,9 @@ function maybeRefresh() {
   const cur = currentBinder();
   if (!cur.cards.length) return;
   const oldest = Math.min(...cur.cards.map(e => e.priceUpdatedAt || 0));
-  if (Date.now() - oldest > PRICE_MAX_AGE) refreshPrices(cur.id);
+  const missing = cur.cards.some(e => e.price == null && !e.priceManual && (e.language || 'en') === 'en' &&
+    Date.now() - (e.priceUpdatedAt || 0) > 3600 * 1000);
+  if (Date.now() - oldest > PRICE_MAX_AGE || missing) refreshPrices(cur.id);
 }
 
 async function refreshPrices(binderId) {
@@ -791,8 +967,14 @@ async function refreshPrices(binderId) {
   let failed = 0;
   for (let i = 0; i < pairs.length; i += 6) {
     const res = await Promise.all(pairs.slice(i, i + 6).map(async ([lang, id]) => {
-      try { return [`${lang}/${id}`, toCard(await fetchJSON(`${API}/${lang}/cards/${encodeURIComponent(id)}`), lang)]; }
-      catch (e) { return [null, null]; }
+      try {
+        const card = toCard(await fetchJSON(`${API}/${lang}/cards/${encodeURIComponent(id)}`), lang);
+        if (card && lang === 'en' && !card.prices.length) {
+          const found = await backupPrice(card);
+          if (found) { card.prices = found.prices; card.priceSource = found.source; }
+        }
+        return [`${lang}/${id}`, card];
+      } catch (e) { return [null, null]; }
     }));
     for (const [k, card] of res) { if (card) fresh.set(k, card); else failed++; }
   }
@@ -815,7 +997,8 @@ function openEntry(key) {
   const e = cur.cards.find(x => x.key === key);
   if (!e) return closeSheet();
   app.sheet = { type: 'entry', key };
-  const useEur = e.price == null && e.priceEur != null;
+  const worth = (price, eurVal) => price != null ? usd(price)
+    : eurVal != null ? (fx.rate ? '≈ ' + usd(eurVal * fx.rate) : eur(eurVal)) : 'n/a';
   const langName = { ja: 'Japanese card', 'zh-tw': 'Chinese card (Traditional)', 'zh-cn': 'Chinese card (Simplified)' }[e.language];
   openSheet(`
     <div class="result-top">
@@ -830,9 +1013,12 @@ function openEntry(key) {
       </div>
     </div>
     <div class="tiles" style="margin-top:18px">
-      <div class="tile"><span>Worth now</span><b>${useEur ? eur(e.priceEur) : usd(e.price)}</b></div>
-      <div class="tile"><span>When added</span><b>${useEur ? eur(e.priceEurWhenAdded) : usd(e.priceWhenAdded)}</b></div>
+      <div class="tile"><span>Worth now</span><b>${worth(e.price, e.priceEur)}</b></div>
+      <div class="tile"><span>When added</span><b>${e.price != null ? worth(e.priceWhenAdded, null) : worth(null, e.priceEurWhenAdded)}</b></div>
     </div>
+    ${e.priceManual ? '<p class="small muted" style="margin:8px 0 0">This is a price you entered. It is replaced automatically once a price site has one.</p>' : ''}
+    ${e.price == null || e.priceManual
+      ? `<button class="text-btn" data-action="entry-price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
     <p class="small muted">Added ${new Date(e.addedAt).toLocaleDateString()}</p>
     <h3>How many are in ${esc(binderTitle(cur.name))}?</h3>
     <div class="stepper">
@@ -918,7 +1104,30 @@ document.addEventListener('click', async ev => {
   }
   else if (a === 'rescan') setScan({ state: 'scanning' });
   else if (a === 'variant') { s.variantIdx = Number(el.dataset.i); renderDock(); }
-  else if (a === 'pick') { s.selectedId = el.dataset.id; s.variantIdx = 0; renderDock(); }
+  else if (a === 'pick') {
+    s.selectedId = el.dataset.id; s.variantIdx = 0;
+    kickBackup(s.cards.find(c => c.id === s.selectedId));
+    renderDock();
+  }
+  else if (a === 'manual-price') {
+    const card = s.cards.find(c => c.id === s.selectedId);
+    if (!card) return;
+    const v = parseMoney(prompt(`What is ${card.name} worth in US dollars?`, card.manualPrice != null ? String(card.manualPrice) : ''));
+    if (v != null) { card.manualPrice = v; renderDock(); }
+  }
+  else if (a === 'entry-price') {
+    const cur = currentBinder();
+    const e = cur.cards.find(x => x.key === app.sheet.key);
+    if (!e) return;
+    const v = parseMoney(prompt(`What is ${e.name} worth in US dollars?`, e.priceManual ? String(e.price) : ''));
+    if (v != null) {
+      e.price = v; e.priceManual = true; e.priceUpdatedAt = Date.now();
+      if (e.priceWhenAdded == null) e.priceWhenAdded = v;
+      store.save();
+      renderBinders();
+      openEntry(e.key);
+    }
+  }
   else if (a === 'add') {
     const card = s.cards.find(c => c.id === s.selectedId) || s.cards[0];
     const variant = card.prices[Math.min(s.variantIdx || 0, card.prices.length - 1)] || null;
@@ -1027,6 +1236,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- start ----------
 store.init();
+fx.init();
 renderLang();
 renderDock();
 camera.start();
