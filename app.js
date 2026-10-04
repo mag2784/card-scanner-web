@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.5';
+const APP_VERSION = '1.6';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -205,6 +205,7 @@ function kickBackup(card) {
       card.priceState = 'done';
       card.priceCheckedAt = Date.now();
       if (app.view === 'scan' && app.scan.state === 'results' && app.scan.selectedId === card.id) renderDock();
+      if (app.detail && app.detail.card === card) renderDetails();
     });
 }
 
@@ -948,12 +949,14 @@ function entrySheetHTML(e) {
     ${e.price == null || e.priceManual ? `<button class="bk-link" type="button" data-bk="price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
     <div class="bk-qty-row"><span>In ${esc(binderTitle(cur.name))}</span>
       <div class="bk-step"><button type="button" data-bk="qty-" aria-label="One less" ${e.quantity <= 1 ? 'disabled' : ''}>−</button><b>${e.quantity}</b><button type="button" data-bk="qty+" aria-label="One more">+</button></div></div>
-    <div class="bk-btns"><button class="bk-btn out" type="button" data-bk="flip">Flip card</button><button class="bk-btn pri" type="button" data-bk="close">Back to binder</button></div>
+    <div class="bk-btns"><button class="bk-btn out" type="button" data-bk="flip">Flip card</button><button class="bk-btn out" type="button" data-bk="details">Card details</button></div>
+    <div class="bk-btns" style="margin-top:10px"><button class="bk-btn pri" type="button" data-bk="close">Back to binder</button></div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><button class="bk-link danger" type="button" data-bk="remove">Remove from binder</button><span class="bk-tip" style="margin:0">Drag the card to tilt it.</span></div>`;
 }
 
 function entryAction(act, e) {
   const cur = currentBinder();
+  if (act === 'details') return openCardDetails(e);
   if (act === 'qty+' || act === 'qty-') {
     const q = e.quantity + (act === 'qty+' ? 1 : -1);
     if (q < 1) return;
@@ -972,6 +975,93 @@ function entryAction(act, e) {
       store.save(); renderBinders(); BinderUI.summon.refresh();
     }
   }
+}
+
+// ---------- card details, opened from a binder card ----------
+
+/** A card-shaped object from what the binder saved, so the details can show something before (or without) the lookup. */
+function entryCard(e) {
+  return {
+    id: e.cardId, name: e.name, number: e.number, setName: e.setName, setId: null, setTotal: e.setTotal, rarity: e.rarity,
+    imageSmall: e.imageSmall, imageLarge: e.imageLarge, prices: [], tcgUpdated: null, cmTrend: null, cmAvg30: null, cmTrendHolo: null,
+    lang: e.language || 'en', identified: isIdentified(e.cardId), manualPrice: e.priceManual ? e.price : null,
+  };
+}
+
+/** The same card details you get after scanning (price versions, Cardmarket, where the price came from), for a card in a binder. */
+async function openCardDetails(e) {
+  const identified = isIdentified(e.cardId);
+  app.detail = { entry: e, card: entryCard(e), variantIdx: 0, loading: !identified, error: false };
+  renderDetails();
+  if (identified) return;
+  const mine = app.detail;
+  try {
+    const [card] = await cardDetails([{ id: e.cardId, lang: e.language || 'en' }]);
+    if (app.detail !== mine) return;                       // closed while loading
+    if (e.priceManual) card.manualPrice = e.price;
+    mine.card = card; mine.loading = false;
+    const i = card.prices.findIndex(p => p.label === e.variant);
+    mine.variantIdx = i >= 0 ? i : 0;
+    renderDetails();
+    kickBackup(card);                                      // no US price from TCGdex: look in the backup sources
+    if (card.priceState === 'pending') renderDetails();
+  } catch (err) {
+    if (app.detail !== mine) return;
+    mine.loading = false; mine.error = true;
+    renderDetails();
+  }
+}
+
+function renderDetails() {
+  const html = detailsHtml();
+  const open = app.sheet === 'details' && !$('#overlay').hidden && $('#overlay .sheet');
+  if (open) {
+    const top = open.scrollTop;
+    open.innerHTML = `<div class="handle"></div>${html}`;
+    open.scrollTop = top;
+  } else {
+    openSheet(html);
+    app.sheet = 'details';
+  }
+}
+
+function detailsHtml() {
+  const d = app.detail, card = d.card, e = d.entry;
+  const prices = card.prices;
+  const vIdx = Math.min(d.variantIdx || 0, Math.max(0, prices.length - 1));
+  const variant = prices[vIdx] || null;
+  const numberText = card.number ? `Card ${esc(card.number)}${card.setTotal ? ` of ${card.setTotal}` : ''}` : '';
+  const cmParts = [card.cmTrend != null && `${eur(card.cmTrend)} trend`, card.cmAvg30 != null && `${eur(card.cmAvg30)} 30-day average`,
+    card.cmTrendHolo != null && `${eur(card.cmTrendHolo)} holo trend`].filter(Boolean);
+  const en = card.lang !== 'en' ? species.english(card.name) : null;
+  const q = encodeURIComponent([en || card.name, card.number].filter(Boolean).join(' '));
+  const price = d.loading
+    ? '<div class="tile" style="margin-top:18px;display:flex;gap:12px;align-items:center"><div class="spinner"></div><span>Loading the latest prices…</span></div>'
+    : d.error
+      ? `<div class="notice" style="margin-top:18px">Couldn't load the latest details (check your connection). The binder saved ${esc(priceText(e))}.</div>`
+      : priceHtml(card, prices, vIdx, variant);
+  return `
+    ${card.identified ? '<div class="notice">This card isn\'t in the card database, so there\'s no picture or price feed. You can type in a price yourself.</div>' : ''}
+    <div class="result-top">
+      <div class="foil">${card.imageLarge ? `<img src="${esc(card.imageLarge)}" alt="${esc(card.name)}">` : `<div class="noimg">${esc(card.name)}</div>`}</div>
+      <div class="grow">
+        <h2 class="display">${esc(card.name)}</h2>
+        ${en ? `<div class="muted">English: <b>${esc(en)}</b></div>` : ''}
+        ${card.setName ? `<div><b>${esc(card.setName)}</b></div>` : ''}
+        ${numberText ? `<div class="muted">${numberText}</div>` : ''}
+        ${card.rarity ? `<span class="badge">${esc(card.rarity)}</span>` : ''}
+      </div>
+    </div>
+    ${price}
+    ${!d.loading && cmParts.length ? `<p style="margin:12px 0 0">Cardmarket (Europe): ${cmParts.join(', ')}</p>` : ''}
+    ${!d.loading && card.priceSource ? `<p class="small muted" style="margin:4px 0 0">Price from ${esc(card.priceSource)}. TCGdex had none for this card.</p>`
+      : !d.loading && card.tcgUpdated ? `<p class="small muted" style="margin:4px 0 0">TCGplayer prices from ${esc(card.tcgUpdated)}</p>` : ''}
+    <p style="margin:14px 0 0"><b>In ${esc(binderTitle(currentBinder().name))}: ${e.quantity}${e.variant ? ` (${esc(e.variant)})` : ''}</b></p>
+    <div class="row" style="margin-top:18px">
+      <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.tcgplayer.com/search/pokemon/product?q=${q}">TCGplayer</a>
+      <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(card.name)}">Cardmarket</a>
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:10px" data-action="close-sheet">Back to the binder</button>`;
 }
 
 function renderBinders() {
@@ -1116,7 +1206,7 @@ function openSheet(html) {
   o.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="handle"></div>${html}</div>`;
   o.hidden = false;
 }
-function closeSheet() { $('#overlay').hidden = true; $('#overlay').innerHTML = ''; app.sheet = null; }
+function closeSheet() { $('#overlay').hidden = true; $('#overlay').innerHTML = ''; app.sheet = null; app.detail = null; }
 
 function backupStatus() {
   const s = sync.status;
@@ -1191,7 +1281,13 @@ document.addEventListener('click', async ev => {
     catalogs[app.lang].load().catch(() => {});
   }
   else if (a === 'rescan') setScan({ state: 'scanning' });
+  else if (a === 'variant' && app.detail) { app.detail.variantIdx = Number(el.dataset.i); renderDetails(); }
   else if (a === 'variant') { s.variantIdx = Number(el.dataset.i); renderDock(); }
+  else if (a === 'manual-price' && app.detail) {
+    entryAction('price', app.detail.entry);
+    app.detail.card.manualPrice = app.detail.entry.priceManual ? app.detail.entry.price : null;
+    renderDetails();
+  }
   else if (a === 'pick') {
     s.selectedId = el.dataset.id; s.variantIdx = 0;
     kickBackup(s.cards.find(c => c.id === s.selectedId));

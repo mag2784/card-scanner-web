@@ -147,7 +147,7 @@
     .label { font-weight: 700; margin: 14px 0 6px; }
 
     /* ---------- modal sheets ---------- */
-    #overlay { position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; }
+    #overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; }
     #overlay .sheet { position: relative; width: 100%; max-width: 720px; margin: 0 auto; }
     .steps { padding-left: 22px; margin: 8px 0; }
     .steps li { margin-bottom: 8px; }
@@ -156,7 +156,7 @@
     .stepper button { width: 56px; height: 56px; border-radius: 50%; border: 1.5px solid var(--line); font-size: 26px; color: var(--violet); }
     .stepper b { font: 28px var(--display); min-width: 30px; text-align: center; }
 
-    #toast { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 24px); transform: translateX(-50%) translateY(20px); background: #1E1B3A; color: #fff; padding: 12px 18px; border-radius: 14px; font-weight: 700; opacity: 0; transition: .25s; z-index: 20; pointer-events: none; max-width: 90vw; text-align: center; }
+    #toast { position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 24px); transform: translateX(-50%) translateY(20px); background: #1E1B3A; color: #fff; padding: 12px 18px; border-radius: 14px; font-weight: 700; opacity: 0; transition: .25s; z-index: 80; pointer-events: none; max-width: 90vw; text-align: center; }
     #toast.show { opacity: 1; transform: translateX(-50%); }
 
     @media (prefers-reduced-motion: reduce) {
