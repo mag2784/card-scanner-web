@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.1';
+const APP_VERSION = '1.2';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -431,6 +431,9 @@ const app = {
   refreshing: false,
   refreshMsg: null,
   scriptText: null,
+  bookOpened: false,   // has the binder cover been opened this visit
+  bookPage: 1,         // which page the binder is showing
+  bookFade: false,     // fade the binder in (after switching binder or sorting)
 };
 
 // ---------- camera ----------
@@ -833,8 +836,8 @@ function priceText(e) {
   return 'No price';
 }
 
-/** ▲ / ▼ since the card was added, in the same currency the price is shown in. */
-function priceChange(e) {
+/** The change since the card was added, in the same currency the price is shown in. */
+function priceDelta(e) {
   let now, then, f = usd, tilde = '';
   if (e.price != null) { now = e.price; then = e.priceWhenAdded; }
   else if (isConverted(e)) {
@@ -842,10 +845,55 @@ function priceChange(e) {
     then = e.priceEurWhenAdded != null ? e.priceEurWhenAdded * fx.rate : null;
     tilde = '≈ ';
   } else { now = e.priceEur; then = e.priceEurWhenAdded; f = eur; }
-  if (now == null || then == null) return '';
+  if (now == null || then == null) return null;
   const d = now - then;
-  if (Math.abs(d) < 0.01) return '';
-  return d > 0 ? `<div class="up">▲ ${tilde}${f(d)}</div>` : `<div class="down">▼ ${tilde}${f(-d)}</div>`;
+  if (Math.abs(d) < 0.01) return null;
+  return { up: d > 0, text: `${d > 0 ? '▲' : '▼'} ${tilde}${f(Math.abs(d))} since added` };
+}
+
+const hexToRgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+const darken = (h, k = .8) => '#' + hexToRgb(h).map(v => Math.round(v * k).toString(16).padStart(2, '0')).join('');
+
+/** What opens when you tap a card in the binder: the information under the floating card. */
+function entrySheetHTML(e) {
+  const cur = currentBinder();
+  const langName = { ja: 'Japanese card', 'zh-tw': 'Chinese card (Traditional)', 'zh-cn': 'Chinese card (Simplified)' }[e.language];
+  const delta = priceDelta(e);
+  const where = [e.setName, e.number ? `card ${e.number}${e.setTotal ? ' of ' + e.setTotal : ''}` : null].filter(Boolean).join(', ');
+  const more = [e.variant, langName, 'Added ' + new Date(e.addedAt).toLocaleDateString()].filter(Boolean).join(', ');
+  return `<div class="bk-grab"></div>
+    <h2>${esc(e.name)}</h2>
+    <div class="bk-meta-row"><span class="bk-badge" style="${BinderUI.badgeStyle(e.rarity)}">${esc(e.rarity || 'Rarity unknown')}</span>${where ? `<span class="bk-sub">${esc(where)}</span>` : ''}</div>
+    <div class="bk-price-row"><span class="bk-big">${esc(priceText(e))}</span>${delta ? `<span class="${delta.up ? 'bk-up' : 'bk-down'}">${delta.text}</span>` : ''}</div>
+    <p class="bk-sub">${esc(more)}</p>
+    ${e.priceManual ? '<p class="bk-sub" style="margin-top:6px">This is a price you entered. It is replaced automatically once a price site has one.</p>' : ''}
+    ${e.price == null || e.priceManual ? `<button class="bk-link" type="button" data-bk="price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
+    <div class="bk-qty-row"><span>In ${esc(binderTitle(cur.name))}</span>
+      <div class="bk-step"><button type="button" data-bk="qty-" aria-label="One less" ${e.quantity <= 1 ? 'disabled' : ''}>−</button><b>${e.quantity}</b><button type="button" data-bk="qty+" aria-label="One more">+</button></div></div>
+    <div class="bk-btns"><button class="bk-btn out" type="button" data-bk="flip">Flip card</button><button class="bk-btn pri" type="button" data-bk="close">Back to binder</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><button class="bk-link danger" type="button" data-bk="remove">Remove from binder</button><span class="bk-tip" style="margin:0">Drag the card to tilt it.</span></div>`;
+}
+
+function entryAction(act, e) {
+  const cur = currentBinder();
+  if (act === 'qty+' || act === 'qty-') {
+    const q = e.quantity + (act === 'qty+' ? 1 : -1);
+    if (q < 1) return;
+    store.setQuantity(cur.id, e.key, q);
+    renderBinders(); BinderUI.summon.refresh();
+  } else if (act === 'remove') {
+    if (!confirm(`Remove ${e.name} from ${binderTitle(cur.name)}?`)) return;
+    store.setQuantity(cur.id, e.key, 0);
+    BinderUI.summon.close({ dissolve: true });
+    renderBinders();
+  } else if (act === 'price') {
+    const v = parseMoney(prompt(`What is ${e.name} worth in US dollars?`, e.priceManual ? String(e.price) : ''));
+    if (v != null) {
+      e.price = v; e.priceManual = true; e.priceUpdatedAt = Date.now();
+      if (e.priceWhenAdded == null) e.priceWhenAdded = v;
+      store.save(); renderBinders(); BinderUI.summon.refresh();
+    }
+  }
 }
 
 function renderBinders() {
@@ -854,6 +902,9 @@ function renderBinders() {
   const cur = currentBinder();
   const idx = cols.indexOf(cur);
   const color = BINDER_COLORS[idx % BINDER_COLORS.length];
+  view.style.setProperty('--accent-rgb', hexToRgb(color).join(','));
+  view.style.setProperty('--accent-text', darken(color));
+  const keepScroll = view.scrollTop;
 
   let list = cur.cards.filter(e => !app.rarity || (e.rarity || 'Unknown') === app.rarity);
   const val = e => (usdOf(e) ?? 0) * e.quantity;
@@ -871,68 +922,65 @@ function renderBinders() {
   const oldest = cur.cards.length ? Math.min(...cur.cards.map(e => e.priceUpdatedAt || 0)) : null;
   const conv = convertedPart(cur);
   const eurNoRate = totalEurNoRate(cur);
+  const worthNow = usd(total(cur));
 
   view.innerHTML = `
-    <div class="b-header" style="background:${color}">
-      <div class="top">
-        <button class="back" data-action="close-binders">← Back to scanner</button>
-        <button class="pill" style="color:${color}" data-action="open-backup">${sync.link ? 'Backed up' : 'Back up'}</button>
+    <div class="bk-stars" aria-hidden="true"></div>
+    <div class="bk-app">
+      <header class="bk-top">
+        <button class="bk-backbtn" type="button" data-action="close-binders"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to scanner</span></button>
+        <button class="bk-pill" type="button" data-action="open-backup">${sync.link ? 'Backed up' : 'Back up'}</button>
+      </header>
+      <h1 class="bk-title">Binders</h1>
+      <div class="bk-tabs" role="group" aria-label="Choose a binder">
+        ${cols.map(c => `<button class="bk-tab" type="button" data-action="binder" data-id="${esc(c.id)}" aria-pressed="${c.id === cur.id}">${esc(c.name)}</button>`).join('')}
+        <button class="bk-tab bk-new" type="button" data-action="new-binder" aria-label="Add a binder">+ New</button>
       </div>
-      <h1>Binders</h1>
-      <div class="tabs">
-        ${cols.map((c, i) => `<button data-action="binder" data-id="${esc(c.id)}" aria-pressed="${c.id === cur.id}"
-            style="${c.id === cur.id ? `color:${BINDER_COLORS[i % BINDER_COLORS.length]}` : ''}">${esc(c.name)}</button>`).join('')}
-        <button data-action="new-binder" aria-label="Add a binder">+ New</button>
-      </div>
-    </div>
-    <div class="b-body">
-      <div class="card-box">
-        <div class="muted"><b>${esc(binderTitle(cur.name))} is worth</b></div>
-        <div class="price">${usd(total(cur))}</div>
-        ${conv.eur > 0 ? `<div class="small muted">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
-        ${eurNoRate > 0 ? `<div class="up" style="font-size:16px">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
-        <div style="font-size:17px">${n} card${n === 1 ? '' : 's'}, ${unique} different</div>
-        ${top && usdOf(top) ? `<div>Top card: ${esc(top.name)}, ${isConverted(top) ? '≈ ' : ''}${usd(usdOf(top))}</div>` : ''}
-        ${cur.cards.length ? `
-          <div class="row" style="margin-top:6px">
-            <span class="grow small muted">TCGplayer market prices, updated ${timeAgo(oldest)}</span>
-            ${app.refreshing ? '<div class="spinner"></div>' : '<button class="text-btn" data-action="refresh">Refresh prices</button>'}
-          </div>
-          ${app.refreshMsg ? `<div class="small down">${esc(app.refreshMsg)}</div>` : ''}` : ''}
-        <div class="row small" style="margin-top:6px">
-          <button class="text-btn small" data-action="rename-binder">Rename</button>
-          ${cols.length > 1 ? '<button class="text-btn small danger" data-action="delete-binder">Delete binder</button>' : ''}
+      <section class="bk-worth" aria-live="polite">
+        <div class="bk-worth-row">
+          <div><small>${esc(binderTitle(cur.name))} is worth</small><div class="bk-big">${worthNow}</div></div>
+          <div class="bk-meta">${n} card${n === 1 ? '' : 's'}, ${unique} different${top && usdOf(top) ? `<br>Top card: ${esc(top.name)}` : ''}</div>
         </div>
+        ${conv.eur > 0 ? `<div class="bk-note">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
+        ${eurNoRate > 0 ? `<div class="bk-note">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
+      </section>
+      <div id="bkStage" class="bk-stage"></div>
+      ${cur.cards.length ? `
+        <div class="bk-chips" role="group" aria-label="Sort the cards">${[['value', 'Value'], ['rarity', 'Rarity'], ['newest', 'Newest'], ['name', 'Name']].map(([k, l]) =>
+          `<button class="bk-chip" type="button" data-action="sort" data-sort="${k}" aria-pressed="${app.sort === k}">${l}</button>`).join('')}</div>
+        <div class="bk-chips" role="group" aria-label="Show one rarity">
+          <button class="bk-chip" type="button" data-action="rarity" data-r="" aria-pressed="${!app.rarity}">All ${n}</button>
+          ${rarityChips.map(([r, c]) => `<button class="bk-chip" type="button" data-action="rarity" data-r="${esc(r)}" aria-pressed="${app.rarity === r}">${esc(r)} ${c}</button>`).join('')}
+        </div>` : ''}
+      <div class="bk-manage">
+        ${cur.cards.length ? `${app.refreshing ? '<div class="bk-spin" aria-label="Updating prices"></div>' : '<button class="bk-link" type="button" data-action="refresh">Refresh prices</button>'}
+          <span>TCGplayer market prices, updated ${timeAgo(oldest)}</span>` : ''}
+        ${app.refreshMsg ? `<span style="color:var(--bk-rose)">${esc(app.refreshMsg)}</span>` : ''}
+        <button class="bk-link" type="button" data-action="rename-binder">Rename</button>
+        ${cols.length > 1 ? '<button class="bk-link danger" type="button" data-action="delete-binder">Delete binder</button>' : ''}
       </div>
-
-      ${!cur.cards.length ? `
-        <div style="text-align:center;padding:32px 8px">
-          <h2 class="display">${esc(binderTitle(cur.name))} is empty</h2>
-          <p class="muted" style="font-size:17px">Scan a card, then tap "Add to ${esc(cur.name)}" on the result.</p>
-        </div>` : `
-        <div class="label">Sort by</div>
-        <div class="chips">${[['value', 'Value'], ['rarity', 'Rarity'], ['newest', 'Newest'], ['name', 'Name']].map(([k, l]) =>
-          `<button class="chip-btn" data-action="sort" data-sort="${k}" aria-pressed="${app.sort === k}">${l}</button>`).join('')}</div>
-        <div class="label">Rarity</div>
-        <div class="chips">
-          <button class="chip-btn" data-action="rarity" data-r="" aria-pressed="${!app.rarity}">All ${n}</button>
-          ${rarityChips.map(([r, c]) => `<button class="chip-btn" data-action="rarity" data-r="${esc(r)}" aria-pressed="${app.rarity === r}">${esc(r)} ${c}</button>`).join('')}
-        </div>
-        <div class="grid">${list.map(e => `
-          <button class="cell" data-action="entry" data-key="${esc(e.key)}">
-            <div class="pic">${e.imageSmall ? `<img src="${esc(e.imageSmall)}" alt="${esc(e.name)}" loading="lazy">` : ''}
-              ${e.quantity > 1 ? `<span class="qty">×${e.quantity}</span>` : ''}</div>
-            <div class="nm">${esc(e.name)}</div>
-            <div class="pr">${priceText(e)}</div>
-            ${e.priceManual ? '<div class="small muted">your price</div>' : ''}
-            ${priceChange(e)}
-          </button>`).join('')}
-        </div>`}
     </div>`;
+
+  BinderUI.render($('#bkStage'), {
+    name: cur.name,
+    coverInfo: `${n} card${n === 1 ? '' : 's'}, worth ${worthNow}`,
+    entries: list,
+    page: app.bookPage, opened: app.bookOpened, fade: app.bookFade,
+    emptyMessage: list.length ? '' : cur.cards.length
+      ? '<b>No cards here</b><span>Pick a different rarity below.</span>'
+      : `<b>${esc(binderTitle(cur.name))} is empty</b><span>Scan a card, then tap Add to ${esc(cur.name)}.</span>`,
+    priceTag: priceText,
+    onPage: p => { app.bookPage = p; },
+    onOpened: () => { app.bookOpened = true; },
+    summon: { getEntry: key => currentBinder().cards.find(e => e.key === key), sheetHTML: entrySheetHTML, onAction: entryAction },
+  });
+  app.bookFade = false;
+  view.scrollTop = keepScroll;
 }
 
 function openBinders() {
   app.view = 'binders';
+  app.bookOpened = false; app.bookPage = 1;
   camera.stop();
   $('#scan-view').hidden = true;
   $('#binders-view').hidden = false;
@@ -991,44 +1039,6 @@ function openSheet(html) {
   o.hidden = false;
 }
 function closeSheet() { $('#overlay').hidden = true; $('#overlay').innerHTML = ''; app.sheet = null; }
-
-function openEntry(key) {
-  const cur = currentBinder();
-  const e = cur.cards.find(x => x.key === key);
-  if (!e) return closeSheet();
-  app.sheet = { type: 'entry', key };
-  const worth = (price, eurVal) => price != null ? usd(price)
-    : eurVal != null ? (fx.rate ? '≈ ' + usd(eurVal * fx.rate) : eur(eurVal)) : 'n/a';
-  const langName = { ja: 'Japanese card', 'zh-tw': 'Chinese card (Traditional)', 'zh-cn': 'Chinese card (Simplified)' }[e.language];
-  openSheet(`
-    <div class="result-top">
-      <div class="foil" style="width:140px">${e.imageLarge || e.imageSmall ? `<img src="${esc(e.imageLarge || e.imageSmall)}" alt="${esc(e.name)}">` : ''}</div>
-      <div class="grow">
-        <h2 class="display">${esc(e.name)}</h2>
-        ${e.setName ? `<div><b>${esc(e.setName)}</b></div>` : ''}
-        ${e.number ? `<div class="muted">Card ${esc(e.number)}${e.setTotal ? ` of ${e.setTotal}` : ''}</div>` : ''}
-        ${e.variant ? `<div>${esc(e.variant)}</div>` : ''}
-        ${langName ? `<div>${langName}</div>` : ''}
-        ${e.rarity ? `<span class="badge">${esc(e.rarity)}</span>` : ''}
-      </div>
-    </div>
-    <div class="tiles" style="margin-top:18px">
-      <div class="tile"><span>Worth now</span><b>${worth(e.price, e.priceEur)}</b></div>
-      <div class="tile"><span>When added</span><b>${e.price != null ? worth(e.priceWhenAdded, null) : worth(null, e.priceEurWhenAdded)}</b></div>
-    </div>
-    ${e.priceManual ? '<p class="small muted" style="margin:8px 0 0">This is a price you entered. It is replaced automatically once a price site has one.</p>' : ''}
-    ${e.price == null || e.priceManual
-      ? `<button class="text-btn" data-action="entry-price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
-    <p class="small muted">Added ${new Date(e.addedAt).toLocaleDateString()}</p>
-    <h3>How many are in ${esc(binderTitle(cur.name))}?</h3>
-    <div class="stepper">
-      <button data-action="qty" data-d="-1" aria-label="One less">−</button>
-      <b>${e.quantity}</b>
-      <button data-action="qty" data-d="1" aria-label="One more">+</button>
-    </div>
-    <button class="text-btn danger" style="margin-top:12px" data-action="remove">Remove from ${esc(binderTitle(cur.name))}</button>
-    <button class="btn btn-outline btn-block" style="margin-top:8px" data-action="close-sheet">Done</button>`);
-}
 
 function backupStatus() {
   const s = sync.status;
@@ -1115,19 +1125,6 @@ document.addEventListener('click', async ev => {
     const v = parseMoney(prompt(`What is ${card.name} worth in US dollars?`, card.manualPrice != null ? String(card.manualPrice) : ''));
     if (v != null) { card.manualPrice = v; renderDock(); }
   }
-  else if (a === 'entry-price') {
-    const cur = currentBinder();
-    const e = cur.cards.find(x => x.key === app.sheet.key);
-    if (!e) return;
-    const v = parseMoney(prompt(`What is ${e.name} worth in US dollars?`, e.priceManual ? String(e.price) : ''));
-    if (v != null) {
-      e.price = v; e.priceManual = true; e.priceUpdatedAt = Date.now();
-      if (e.priceWhenAdded == null) e.priceWhenAdded = v;
-      store.save();
-      renderBinders();
-      openEntry(e.key);
-    }
-  }
   else if (a === 'add') {
     const card = s.cards.find(c => c.id === s.selectedId) || s.cards[0];
     const variant = card.prices[Math.min(s.variantIdx || 0, card.prices.length - 1)] || null;
@@ -1144,10 +1141,10 @@ document.addEventListener('click', async ev => {
   }
   else if (a === 'open-binders') openBinders();
   else if (a === 'close-binders') closeBinders();
-  else if (a === 'binder') { app.binderId = el.dataset.id; app.rarity = null; renderBinders(); maybeRefresh(); }
+  else if (a === 'binder') { app.binderId = el.dataset.id; app.rarity = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true; renderBinders(); maybeRefresh(); }
   else if (a === 'new-binder') {
     const name = (prompt('Name for the new binder (for example, a child\'s name):') || '').trim();
-    if (name) { app.binderId = store.addBinder(name.slice(0, 24)).id; app.rarity = null; renderBinders(); }
+    if (name) { app.binderId = store.addBinder(name.slice(0, 24)).id; app.rarity = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true; renderBinders(); }
   }
   else if (a === 'rename-binder') {
     const cur = currentBinder();
@@ -1159,23 +1156,13 @@ document.addEventListener('click', async ev => {
     if (store.collections.length > 1 && confirm(`Delete "${cur.name}" and its ${count(cur)} cards? This can't be undone.`)) {
       store.lib.collections = store.collections.filter(c => c !== cur);
       store.save();
-      app.binderId = null;
+      app.binderId = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true;
       renderBinders();
     }
   }
-  else if (a === 'sort') { app.sort = el.dataset.sort; renderBinders(); }
-  else if (a === 'rarity') { app.rarity = el.dataset.r || null; renderBinders(); }
+  else if (a === 'sort') { app.sort = el.dataset.sort; app.bookPage = 1; app.bookFade = true; renderBinders(); }
+  else if (a === 'rarity') { app.rarity = el.dataset.r || null; app.bookPage = 1; app.bookFade = true; renderBinders(); }
   else if (a === 'refresh') refreshPrices(currentBinder().id);
-  else if (a === 'entry') openEntry(el.dataset.key);
-  else if (a === 'qty' || a === 'remove') {
-    const cur = currentBinder();
-    const e = cur.cards.find(x => x.key === app.sheet.key);
-    if (!e) return closeSheet();
-    const q = a === 'remove' ? 0 : e.quantity + Number(el.dataset.d);
-    store.setQuantity(cur.id, e.key, q);
-    renderBinders();
-    if (q <= 0) closeSheet(); else openEntry(e.key);
-  }
   else if (a === 'close-sheet') closeSheet();
   else if (a === 'open-backup') openBackup();
   else if (a === 'copy-script') {
@@ -1191,7 +1178,7 @@ document.addEventListener('click', async ev => {
     if (!confirm('Replace the binders on this phone with the ones saved in the Google Sheet?')) return;
     try {
       const ok = await sync.restore();
-      app.binderId = null;
+      app.binderId = null; app.bookOpened = false; app.bookPage = 1;
       renderBinders();
       openBackup(ok ? 'Restored the binders from the sheet.' : 'The sheet has no binders to restore yet.');
     } catch (e) { openBackup(e.message); }
@@ -1221,7 +1208,7 @@ document.addEventListener('submit', async ev => {
     btn.disabled = true; btn.textContent = 'Connecting…';
     try {
       const note = await sync.connect(form.link.value);
-      app.binderId = null;
+      app.binderId = null; app.bookOpened = false; app.bookPage = 1;
       renderBinders();
       openBackup(note);
     } catch (e) {

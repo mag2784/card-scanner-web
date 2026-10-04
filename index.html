@@ -16,6 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Lilita+One&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="binder.css">
   <style>
     /* Sticker-and-binder look: Lilita One for names, prices and titles;
        Atkinson Hyperlegible (built for legibility) for everything you read. */
@@ -181,12 +182,26 @@
     <div id="dock" class="sheet"></div>
   </section>
 
-  <section id="binders-view" hidden></section>
+  <section id="binders-view" class="bk" hidden></section>
   <div id="overlay" hidden></div>
+
+  <!-- A card summoned out of its binder pocket (see binder.js) -->
+  <div id="bkSummon" aria-hidden="true">
+    <div class="bk-veil"></div>
+    <div class="bk-rays" id="bkRays"></div>
+    <div class="bk-aura" id="bkAura"></div>
+    <div id="bkSigilHost"></div>
+    <div class="bk-burst" id="bkBurst1"></div><div class="bk-burst b2" id="bkBurst2"></div>
+    <div class="bk-gshadow" id="bkGshadow"></div>
+    <canvas id="bkSpB"></canvas><canvas id="bkSpF"></canvas>
+    <button class="bk-x" id="bkX" type="button" aria-label="Put the card back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <div class="bk-sheet" id="bkSheet"></div>
+  </div>
   <div id="toast" role="status"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
   <script src="logic.js"></script>
+  <script src="binder.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
