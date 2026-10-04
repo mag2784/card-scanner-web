@@ -137,8 +137,9 @@
 .bk-front img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;-webkit-user-drag:none}
 .bk-noimg{position:absolute;inset:0;display:grid;place-items:center;padding:8%;text-align:center;color:#fff;
   background:linear-gradient(150deg,#4C37BE,#1B1635);font:700 14px/1.15 var(--body)}
-.bk-cback{transform:rotateY(180deg) translateZ(1.3px);background:radial-gradient(circle at 50% 36%,#4C37BE,#150F3D 72%)}
+.bk-cback{transform:rotateY(180deg) translateZ(1.3px);background:#1B2559}
 .bk-cback svg{position:absolute;inset:0;width:100%;height:100%}
+.bk-cback .bk-backimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .bk-edge{position:absolute;background:linear-gradient(90deg,#b4b2cc,#f2f1fb,#a09ebd)}
 .bk-edge.l{left:0;top:3%;height:94%;width:2.6px;margin-left:-1.3px;transform:rotateY(90deg)}
 .bk-edge.r{right:0;top:3%;height:94%;width:2.6px;margin-right:-1.3px;transform:rotateY(90deg)}

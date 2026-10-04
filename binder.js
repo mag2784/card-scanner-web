@@ -75,7 +75,7 @@ const BinderUI = (() => {
     const img = src ? `<img src="${esc(src)}" alt="" draggable="false" decoding="async">` : `<div class="bk-noimg">${esc(e.name)}</div>`;
     const front = `<div class="bk-face bk-front">${img}<div class="bk-holo"></div><div class="bk-glare"></div></div>`;
     if (flat) return `<div class="bk-card bk-flat bk-t-${tier}" style="--d:-${(hash(e.key) % 70) / 10}s">${front}</div>`;
-    return `<div class="bk-card bk-t-${tier}">${front}<div class="bk-face bk-cback">${backSVG()}</div><i class="bk-edge l"></i><i class="bk-edge r"></i><i class="bk-edge t"></i><i class="bk-edge b"></i></div>`;
+    return `<div class="bk-card bk-t-${tier}">${front}<div class="bk-face bk-cback">${backSVG()}<img class="bk-backimg" src="card-back.webp" alt="" draggable="false" decoding="async" onerror="this.style.display='none'"></div><i class="bk-edge l"></i><i class="bk-edge r"></i><i class="bk-edge t"></i><i class="bk-edge b"></i></div>`;
   }
   function pocketHTML(e, o) {
     const tier = tierOf(e.rarity), tag = o.priceTag(e);
