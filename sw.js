@@ -1,7 +1,7 @@
 /* Card Scanner service worker: works offline, and always tries the network first so
    updates you publish show up the next time the app is opened. */
 const CACHE = 'card-scanner-v1';
-const SHELL = ['./', 'index.html', 'logic.js', 'binder.js', 'binder.css', 'card-back.webp', 'app.js', 'manifest.webmanifest',
+const SHELL = ['./', 'index.html', 'logic.js', 'binder.js', 'binder.css', 'card-back.webp', 'species.json', 'app.js', 'manifest.webmanifest',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'apps-script.txt'];
 
 self.addEventListener('install', e => {

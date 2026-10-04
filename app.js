@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.3';
+const APP_VERSION = '1.4';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -227,6 +227,22 @@ for (const key of Object.keys(LANGS)) {
     },
   };
 }
+
+/** Pokémon names in English / Japanese / Chinese (species.json), loaded once in the background. */
+const species = {
+  api: null, promise: null,
+  load() {
+    if (!this.promise) {
+      this.promise = fetch('species.json').then(r => r.json()).then(rows => {
+        this.api = makeSpecies(rows);
+        if (app.view === 'scan' && app.scan.state === 'results') renderDock();
+        return this.api;
+      }).catch(() => { this.promise = null; return null; });
+    }
+    return this.promise;
+  },
+  english(name) { return this.api ? this.api.englishFor(name) : null; },
+};
 
 const detailCache = new Map();
 async function cardDetails(briefs) {
@@ -614,6 +630,7 @@ function onRead(read) {
   if (votes.framesLocked <= 2) return;   // give the name a moment
   if (usable) return showCandidates(found.cards, null, false, numberText);
   if (strong) return search({ name: strong, number, total });
+  if (app.lang !== 'en') return search({ name: null, number, total });
   resetVotes();
   setScan({ state: 'notfound', label: numberText });
 }
@@ -627,16 +644,45 @@ async function runLookup(label, fn) {
   }
 }
 
+/**
+ * Japanese / Chinese cards the database doesn't have (many Simplified Chinese sets are empty there): offer the card
+ * as we can identify it, so it can still be added to a binder.
+ */
+function identifiedResults(cat, p, existing) {
+  const lang = app.lang === 'ja' ? 'ja' : 'zh-cn';
+  const total = /^\d+$/.test(p.total || '') ? parseInt(p.total, 10) : null;
+  const card = identifiedCard(lang, p.name, p.number, p.total, total ? cat.setsOfSize(total) : []);
+  const cards = [...existing, card];
+  return { state: 'results', cards, selectedId: cards[0].id, exact: false, variantIdx: 0 };
+}
+
+/** Search by English name in Japanese / Chinese mode: "Dragonair" finds the ハクリュー / 哈克龙 cards. */
+function searchLocal(hit, p) {
+  const label = [hit.english, p.number ? (p.total ? `#${p.number}/${p.total}` : `#${p.number}`) : null].filter(Boolean).join(' ');
+  return runLookup(label, async () => {
+    const cat = await catalogs[app.lang].load();
+    let briefs = cat.cardsNamed(hit.locals);
+    if (p.number) {
+      const byNum = briefs.filter(b => b.localId && normalizeNumber(b.localId) === p.number);
+      if (byNum.length) briefs = byNum;
+    }
+    const cards = briefs.length ? await cardDetails(briefs.slice().reverse().slice(0, 8)) : [];
+    return identifiedResults(cat, { name: hit.locals[0], number: p.number, total: p.total }, cards);
+  });
+}
+
 function search(p, typed = false) {
   const label = [p.name, p.number ? (p.total ? `#${p.number}/${p.total}` : `#${p.number}`) : null].filter(Boolean).join(' ');
   return runLookup(label, async () => {
     const cat = await catalogs[app.lang].load();
     const { briefs, exact } = pickTier(cat, p, typed);
-    if (!briefs.length) return { state: 'notfound', label };
+    const other = app.lang !== 'en' && (p.name || p.number);          // Japanese / Chinese
+    if (!briefs.length) return other ? identifiedResults(cat, p, []) : { state: 'notfound', label };
     let cards = await cardDetails(briefs.slice().reverse().slice(0, 8));   // newest first
     const t = /^\d+$/.test(p.total || '') ? parseInt(p.total, 10) : null;
     if (t != null) cards = cards.slice().sort((a, b) => (b.setTotal === t) - (a.setTotal === t));
-    if (!cards.length) return { state: 'notfound', label };
+    if (!cards.length) return other ? identifiedResults(cat, p, []) : { state: 'notfound', label };
+    if (other && !exact) return identifiedResults(cat, p, cards);       // add "not listed" as the last choice
     return { state: 'results', cards, selectedId: cards[0].id, exact, variantIdx: 0 };
   });
 }
@@ -699,7 +745,7 @@ function renderDock() {
     dock.innerHTML = `
       <p class="muted" style="margin:0 0 12px">Fit the card inside the corners. Keep the name and the number at the bottom sharp.</p>
       <form class="row" data-form="search">
-        <input class="field grow" name="q" placeholder="Name and number, e.g. Pikachu 28/131" autocomplete="off" enterkeyhint="search">
+        <input class="field grow" name="q" placeholder="${app.lang === 'en' ? 'Name and number, e.g. Pikachu 28/131' : 'English name or number, e.g. Dragonair 91/129'}" autocomplete="off" enterkeyhint="search">
         <button class="btn btn-primary" type="submit">Search</button>
       </form>
       <div class="row small muted" style="margin-top:10px">
@@ -710,7 +756,7 @@ function renderDock() {
     dock.innerHTML = `<div class="row"><div class="spinner"></div><div><b>Looking it up</b><div class="muted">${esc(s.label)}</div></div></div>`;
   } else if (s.state === 'notfound' || s.state === 'error') {
     const body = s.state === 'notfound'
-      ? `Couldn't find "${esc(s.label)}". The set may be too new for the database, or try typing the name.`
+      ? `Couldn't find "${esc(s.label)}". The set may be too new for the database, or try typing the name.${app.lang !== 'en' ? ' For Japanese and Chinese cards, type the English name, like Dragonair, or the number at the bottom, like 91/129.' : ''}`
       : esc(s.message);
     dock.innerHTML = `
       <h2 class="display">${s.state === 'notfound' ? 'No match yet' : 'Lookup hiccup'}</h2>
@@ -781,16 +827,21 @@ function resultHtml() {
     const n = c.cards.filter(e => e.cardId === card.id).reduce((a, e) => a + e.quantity, 0);
     return n ? `${esc(c.name)} has ${n}` : null;
   }).filter(Boolean);
-  const q = encodeURIComponent([card.name, card.number].filter(Boolean).join(' '));
+  const en = card.lang !== 'en' ? species.english(card.name) : null;
+  const q = encodeURIComponent([en || card.name, card.number].filter(Boolean).join(' '));
+  const notice = card.identified
+    ? "This card isn't in the card database yet, so there's no picture or price. You can still add it to a binder and type in a price yourself."
+    : s.exact ? '' : "Couldn't confirm the exact printing. Pick yours from the row below.";
 
   return `
     <div class="handle"></div>
-    ${s.exact ? '' : '<div class="notice">Couldn\'t confirm the exact printing. Pick yours from the row below.</div>'}
+    ${notice ? `<div class="notice">${esc(notice)}</div>` : ''}
     <div class="result-top">
-      <div class="foil" data-key="${esc(card.id)}">${card.imageLarge ? `<img src="${esc(card.imageLarge)}" alt="${esc(card.name)}">` : ''}</div>
+      <div class="foil" data-key="${esc(card.id)}">${card.imageLarge ? `<img src="${esc(card.imageLarge)}" alt="${esc(card.name)}">` : `<div class="noimg">${esc(card.name)}</div>`}</div>
       <div class="grow">
         <h2 class="display">${esc(card.name)}</h2>
-        ${card.setName ? `<div><b>${esc(card.setName)}</b></div>` : ''}
+        ${en ? `<div class="muted">English: <b>${esc(en)}</b></div>` : ''}
+        ${card.setName ? `<div><b>${esc(card.setName)}</b></div>` : (card.setNames && card.setNames.length > 1 ? `<div class="muted">One of the ${card.setTotal}-card sets: ${esc(card.setNames.join(' or '))}</div>` : '')}
         ${numberText ? `<div class="muted">${numberText}</div>` : ''}
         ${card.rarity ? `<span class="badge">${esc(card.rarity)}</span>` : ''}
       </div>
@@ -804,7 +855,7 @@ function resultHtml() {
       <h3>${s.exact ? 'Other possible matches' : 'Which one is yours?'}</h3>
       <div class="thumbs">${s.cards.map(c => `
         <button data-action="pick" data-id="${esc(c.id)}" aria-pressed="${c.id === card.id}" aria-label="${esc(c.name)}">
-          ${c.imageSmall ? `<img src="${esc(c.imageSmall)}" alt="" loading="lazy">` : ''}</button>`).join('')}
+          ${c.imageSmall ? `<img src="${esc(c.imageSmall)}" alt="" loading="lazy">` : '<span class="thumb-add">${c.identified ? 'Not listed' : esc(c.name)}</span>'}</button>`).join('')}
       </div>` : ''}
 
     <h3>Add to a binder</h3>
@@ -863,6 +914,7 @@ function entrySheetHTML(e) {
   const more = [e.variant, langName, 'Added ' + new Date(e.addedAt).toLocaleDateString()].filter(Boolean).join(', ');
   return `<div class="bk-grab"></div>
     <h2>${esc(e.name)}</h2>
+    ${e.language && e.language !== 'en' && species.english(e.name) ? `<p class="bk-sub" style="margin:2px 0 0">English: ${esc(species.english(e.name))}</p>` : ''}
     <div class="bk-meta-row"><span class="bk-badge" style="${BinderUI.badgeStyle(e.rarity)}">${esc(e.rarity || 'Rarity unknown')}</span>${where ? `<span class="bk-sub">${esc(where)}</span>` : ''}</div>
     <div class="bk-price-row"><span class="bk-big">${esc(priceText(e))}</span>${delta ? `<span class="${delta.up ? 'bk-up' : 'bk-down'}">${delta.text}</span>` : ''}</div>
     <p class="bk-sub">${esc(more)}</p>
@@ -1008,7 +1060,7 @@ function maybeRefresh() {
 async function refreshPrices(binderId) {
   if (app.refreshing) return;
   const c = store.collections.find(x => x.id === binderId);
-  const pairs = [...new Set(c.cards.map(e => `${e.language || 'en'}|${e.cardId}`))].map(s => s.split('|'));
+  const pairs = [...new Set(c.cards.filter(e => !isIdentified(e.cardId)).map(e => `${e.language || 'en'}|${e.cardId}`))].map(s => s.split('|'));
   if (!pairs.length) return;
   app.refreshing = true; app.refreshMsg = null; renderBinders();
   const fresh = new Map();
@@ -1198,6 +1250,11 @@ document.addEventListener('submit', async ev => {
     form.q.blur();
     const p = parseQuery(q);
     if (!p.name && !p.number) return;
+    if (app.lang !== 'en' && p.name && !hasCjk(p.name)) {
+      const api = await species.load();
+      const hit = api && api.localNamesFor(p.name, app.lang);
+      if (hit) return searchLocal(hit, p);
+    }
     try {
       const cat = await catalogs[app.lang].load();
       if (p.name) p.name = cat.resolveName(p.name) || p.name;   // "pickachu" -> "Pikachu"
@@ -1228,6 +1285,7 @@ renderLang();
 renderDock();
 camera.start();
 catalogs[app.lang].load().catch(() => {});
+setTimeout(() => species.load(), 1200);
 scanLoop();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

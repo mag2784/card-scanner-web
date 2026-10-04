@@ -43,6 +43,7 @@ found, you can type in a price yourself; it's replaced automatically once a real
 |---|---|
 | `index.html` | Layout and styles |
 | `logic.js` | Reading card numbers and names, matching, card lookups |
+| `species.json` | Pokémon names in English, Japanese and Chinese, so you can search "Dragonair" and see what a Chinese card is called |
 | `card-back.webp` | The back of the card shown when you flip a summoned card |
 | `binder.js` / `binder.css` | The binders screen: a binder with pockets and turning pages, and the card that floats out of its pocket |
 | `app.js` | Camera, text recognition (Tesseract.js), results, binders, sheet backup |

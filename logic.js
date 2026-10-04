@@ -194,6 +194,15 @@ function buildCatalog(cards, sets) {
       const inSet = all.filter(b => setSize.get(setIdOf(b)) === t);
       return inSet.length ? { cards: inSet, setMatched: true } : { cards: all, setMatched: false };
     },
+    /** Cards whose name (without ex / V / GX) is one of these local names. */
+    cardsNamed(localNames) {
+      const want = new Set(localNames.map(n => String(n).toLowerCase()));
+      return cards.filter(b => b.name && want.has(stripCardSuffix(b.name).toLowerCase()));
+    },
+    /** Names of sets that print this many cards, e.g. 129 -> the Chinese sets with 91/129. */
+    setsOfSize(total) {
+      return [...new Set(sets.filter(x => x.cardCount && x.cardCount.official === total).map(x => x.name).filter(Boolean))];
+    },
     /** Closest real card name to what OCR read, or null. */
     resolveName(raw) {
       const key = String(raw || '').toLowerCase().trim();
@@ -416,10 +425,75 @@ function parseMoney(input) {
   return Number.isFinite(n) && n > 0 && n < 1e6 ? Math.round(n * 100) / 100 : null;
 }
 
+
+// ---------- Pokémon names in English, Japanese and Chinese ----------
+
+/** "ミニリュウex" -> "ミニリュウ", "Pikachu ex" -> "Pikachu". A glued suffix only counts after a non-Latin letter. */
+function stripCardSuffix(name) {
+  const s = String(name || '').trim();
+  const m = /^(.*?)(\s*)(ex|gx|vmax|vstar|break|v)$/i.exec(s);
+  if (!m || !m[1]) return s;
+  return (m[2] || m[1].slice(-1).charCodeAt(0) > 127) ? m[1].trim() : s;
+}
+
+/**
+ * rows[i] = [English, Japanese, Simplified Chinese, Traditional Chinese] for Pokédex number i + 1
+ * (names from PokeAPI's open data). Lets you type "Dragonair" to find ハクリュー or 哈克龙 cards,
+ * and tells you what a card in a language you can't read is called in English.
+ */
+function makeSpecies(rows) {
+  const key = x => String(x || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const local = new Map(), english = [];
+  for (const r of rows) {
+    const [en, ja, hans, hant] = r;
+    if (!en) continue;
+    for (const n of [ja, hans, hant]) { const k = key(n); if (k && !local.has(k)) local.set(k, en); }
+    english.push({ k: key(en), en, ja, zh: [...new Set([hans, hant].filter(Boolean))] });
+  }
+  return {
+    count: english.length,
+    /** English species name for a Japanese or Chinese card name, or null. */
+    englishFor(cardName) { return local.get(key(stripCardSuffix(cardName))) || null; },
+    /** What an English name is called on cards in this language ('ja' or 'zh'), or null if nothing is close. */
+    localNamesFor(query, langKey) {
+      const q = key(query);
+      if (q.length < 3) return null;
+      let hits = english.filter(e => e.k === q);
+      if (!hits.length) hits = english.filter(e => e.k.startsWith(q)).slice(0, 3);
+      if (!hits.length) {
+        const tol = q.length >= 8 ? 2 : q.length >= 5 ? 1 : 0;
+        let best = null, bd = tol + 1;
+        if (tol) for (const e of english) { const d = lev(q, e.k, bd); if (d < bd) { bd = d; best = e; } }
+        if (best) hits = [best];
+      }
+      if (!hits.length) return null;
+      const locals = [...new Set(hits.flatMap(e => (langKey === 'ja' ? [e.ja] : e.zh)).filter(Boolean))];
+      return { english: hits.map(e => e.en).join(' / '), locals };
+    },
+  };
+}
+
+/**
+ * A card the database doesn't have (many Simplified Chinese sets are empty there). We still know what it is
+ * from the name and the printed number, so it can go in a binder with no picture and a price you type.
+ */
+function identifiedCard(lang, name, number, total, setNames) {
+  const t = /^\d+$/.test(total || '') ? parseInt(total, 10) : null;
+  return {
+    id: `manual|${lang}|${t || ''}|${number || ''}|${name || ''}`,
+    name: name || 'Unknown card', number: number || null,
+    setName: setNames && setNames.length === 1 ? setNames[0] : null, setNames: setNames || [], setId: null, setTotal: t,
+    rarity: null, imageSmall: null, imageLarge: null, prices: [], tcgUpdated: null,
+    cmTrend: null, cmAvg30: null, cmTrendHolo: null, lang, identified: true,
+  };
+}
+const isIdentified = id => String(id || '').startsWith('manual|');
+
 if (typeof module !== 'undefined') {
   module.exports = {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
+    stripCardSuffix, makeSpecies, identifiedCard, isIdentified,
   };
 }
