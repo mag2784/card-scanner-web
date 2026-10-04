@@ -855,7 +855,7 @@ function resultHtml() {
       <h3>${s.exact ? 'Other possible matches' : 'Which one is yours?'}</h3>
       <div class="thumbs">${s.cards.map(c => `
         <button data-action="pick" data-id="${esc(c.id)}" aria-pressed="${c.id === card.id}" aria-label="${esc(c.name)}">
-          ${c.imageSmall ? `<img src="${esc(c.imageSmall)}" alt="" loading="lazy">` : '<span class="thumb-add">${c.identified ? 'Not listed' : esc(c.name)}</span>'}</button>`).join('')}
+          ${c.imageSmall ? `<img src="${esc(c.imageSmall)}" alt="" loading="lazy">` : `<span class="thumb-add">${c.identified ? 'Not listed' : esc(c.name)}</span>`}</button>`).join('')}
       </div>` : ''}
 
     <h3>Add to a binder</h3>
