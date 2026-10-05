@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.0.1';
+const APP_VERSION = '2.0.2';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
