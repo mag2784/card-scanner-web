@@ -1,14 +1,12 @@
 'use strict';
 /*
- * Harper and Jaxon pop up from behind the bottom sheet and cheer when a card goes into their binder.
- * Rarer cards get a bigger reaction. Other binders get the confetti without a kid.
- *
- * Which kid is which lives in KIDS below: swap the two image names to swap them.
+ * One of two characters ('blue' or 'yellow', named for their hats) pops up and cheers when a card goes into a binder.
+ * Each binder has its own character, chosen on the binder screen. Rarer cards get a bigger reaction.
  */
 const Celebrate = (() => {
   const KIDS = {
-    harper: { img: 'char-harper.webp', thumb: 'thumbs-harper.webp', side: 'left' },
-    jaxon: { img: 'char-jaxon.webp', thumb: 'thumbs-jaxon.webp', side: 'right' },
+    blue: { img: 'char-blue.webp', avatar: 'avatar-blue.webp', thumb: 'thumbs-blue.webp', side: 'left', label: 'Blue hat' },
+    yellow: { img: 'char-yellow.webp', avatar: 'avatar-yellow.webp', thumb: 'thumbs-yellow.webp', side: 'right', label: 'Yellow hat' },
   };
   const LINES = {
     common: ['Nice one!', 'Into the binder!', 'Yay!', 'Got it!'],
@@ -27,11 +25,6 @@ const Celebrate = (() => {
   const pick = a => a[Math.floor(Math.random() * a.length)];
   let timer = null;
 
-  /** 'harper' / 'jaxon' for a binder called that (any capitals, any extra words), else null. */
-  function whoIs(binderName) {
-    const n = String(binderName || '').toLowerCase();
-    return n.includes('harper') ? 'harper' : n.includes('jaxon') ? 'jaxon' : null;
-  }
 
   function confetti(tier, x, y) {
     if (reduce) return;
@@ -65,16 +58,16 @@ const Celebrate = (() => {
   }
 
   /**
-   * @param binder   the binder name (picks the kid)
+   * @param kid      'blue' or 'yellow' (the binder's character); anything else gives confetti only
    * @param card     what was added (its name is used in the speech bubble for rarer cards)
    * @param tier     'common'..'sir' (BinderUI.tierOf)
    * @param count    how many cards were added at once
    * @param anchor   the element whose top edge the kid peeks over (default: the result sheet)
    * @param z        stacking order of the kid (below the anchor)
    */
-  function show({ binder, card, tier = 'common', count = 1, anchor = null, z = 3 }) {
+  function show({ kid: kidKey, card, tier = 'common', count = 1, anchor = null, z = 3 }) {
     const el = anchor || document.getElementById('dock');
-    const kid = whoIs(binder);
+    const kid = KIDS[kidKey] ? kidKey : null;
     clearTimeout(timer);
     document.querySelectorAll('.cele').forEach(n => n.remove());
     const rect = el ? el.getBoundingClientRect() : { top: innerHeight * .6 };
@@ -127,5 +120,5 @@ const Celebrate = (() => {
     timer = setTimeout(() => root.remove(), D + 120);
   }
 
-  return { show, whoIs, avatar: kid => (KIDS[kid] ? KIDS[kid].img.replace('char-', 'avatar-') : null) };
+  return { show, kids: Object.keys(KIDS), avatar: kid => (KIDS[kid] ? KIDS[kid].avatar : null), label: kid => (KIDS[kid] ? KIDS[kid].label : '') };
 })();

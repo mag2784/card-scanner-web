@@ -157,14 +157,14 @@ const Bulk = (() => {
     const bid = [...perBinder.entries()].sort((a, b) => b[1] - a[1])[0];
     const b = bid ? binderOf(bid[0]) : null;
     toast(added ? `Added ${added} card${added === 1 ? '' : 's'}${perBinder.size === 1 && b ? ` to ${b.name}` : ''}` : "Nothing was added");
-    if (added && b) Celebrate.show({ binder: b.name, card: top, tier: BinderUI.tierOf(top && top.rarity), count: added });
+    if (added && b) Celebrate.show({ kid: kidOf(b), card: top, tier: BinderUI.tierOf(top && top.rarity), count: added });
     if (app.view === 'binders') renderBinders();
   }
 
   // ---------- the screen ----------
   const chip = (act, id, on, label, av) => `<button type="button" class="bulk-chip" data-bk="${act}" data-v="${esc(id)}" aria-pressed="${on}">${av ? `<img src="${av}" alt="">` : ''}${esc(label)}</button>`;
   const binderChips = (act, current, scopeAttr = '') => store.collections.map(c => {
-    const av = Celebrate.avatar(Celebrate.whoIs(c.name));
+    const av = Celebrate.avatar(kidOf(c));
     return `<button type="button" class="bulk-chip" data-bk="${act}" data-v="${esc(c.id)}" ${scopeAttr} aria-pressed="${c.id === current}">${av ? `<img src="${av}" alt="">` : ''}${esc(c.name)}</button>`;
   }).join('');
 

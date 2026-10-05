@@ -199,7 +199,7 @@ const Analytics = (() => {
     const keep = el.scrollTop, now = Date.now();
     const a = binderAnalytics(c.cards, now, fx.rate);
     const idx = store.collections.indexOf(c), color = BINDER_COLORS[idx % BINDER_COLORS.length];
-    const kid = Celebrate.whoIs(c.name), av = kid ? Celebrate.avatar(kid) : null;
+    const av = Celebrate.avatar(kidOf(c));
     binds = [];
     el.style.setProperty('--an-accent', color);
     el.innerHTML = `<div class="an-wrap">

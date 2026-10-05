@@ -764,6 +764,9 @@ function mergeBinder(a, b, id) {
   const useB = (b.nameT || 0) > (a.nameT || 0);
   const out = { ...b, ...a, id, name: useB ? b.name : a.name, cards: all.filter(e => qtyOf(e) > 0), dead: all.filter(e => qtyOf(e) <= 0 && e.qd) };
   const nameT = Math.max(a.nameT || 0, b.nameT || 0); if (nameT) out.nameT = nameT;
+  const kid = ((b.kidT || 0) > (a.kidT || 0) ? b.kid : a.kid) || b.kid || a.kid;     // the newest choice of character
+  if (kid) out.kid = kid;
+  const kidT = Math.max(a.kidT || 0, b.kidT || 0); if (kidT) out.kidT = kidT;
   const h = mergeHist(a.hist, b.hist); if (h.length) out.hist = h;
   return out;
 }

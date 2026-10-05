@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -392,6 +392,10 @@ const store = {
     this.save();
     return c;
   },
+  setKid(id, kid) {
+    const c = this.collections.find(x => x.id === id);
+    if (c) { c.kid = kid; c.kidT = Date.now(); this.save(); }
+  },
   renameBinder(id, name) {
     const c = this.collections.find(x => x.id === id);
     if (c) { c.name = name; c.nameT = Date.now(); this.save(); }
@@ -402,6 +406,13 @@ const store = {
     this.save();
   },
 };
+
+/** The character that cheers for a binder: the one chosen on the binder screen, else the two take turns by binder order. */
+function kidOf(b) {
+  if (!b) return null;
+  if (b.kid === 'blue' || b.kid === 'yellow') return b.kid;
+  return store.collections.indexOf(b) % 2 === 0 ? 'blue' : 'yellow';
+}
 
 /** "Harper" -> "Harper's binder"; "My binder" stays "My binder". */
 const binderTitle = name => (/binder$/i.test(name) ? name : `${name}'s binder`);
@@ -989,7 +1000,7 @@ function resultHtml() {
     <h3>Add to a binder</h3>
     ${prices.length > 1 && variant ? `<div class="small muted">Adds the ${esc(variant.label)} version. Pick a different one with the buttons above.</div>` : ''}
     <div class="add-row">${store.collections.map((c, i) =>
-      `<button class="btn" style="background:${BINDER_COLORS[i % BINDER_COLORS.length]}" data-action="add" data-binder="${esc(c.id)}">${Celebrate.avatar(Celebrate.whoIs(c.name)) ? `<img class="av" src="${Celebrate.avatar(Celebrate.whoIs(c.name))}" alt="">` : ''}Add to ${esc(c.name)}</button>`).join('')}
+      `<button class="btn" style="background:${BINDER_COLORS[i % BINDER_COLORS.length]}" data-action="add" data-binder="${esc(c.id)}">${Celebrate.avatar(kidOf(c)) ? `<img class="av" src="${Celebrate.avatar(kidOf(c))}" alt="">` : ''}Add to ${esc(c.name)}</button>`).join('')}
     </div>
     ${owned.length ? `<p style="margin:8px 0 0"><b>${owned.join(' and ')} of this card.</b></p>` : ''}
 
@@ -1215,6 +1226,10 @@ function renderBinders() {
         ${conv.eur > 0 ? `<div class="bk-note">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
         ${eurNoRate > 0 ? `<div class="bk-note">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
       </section>
+      <div class="bk-kidpick" role="group" aria-label="Cheering character">
+        <span>Cheering character</span>
+        ${Celebrate.kids.map(k => `<button type="button" class="bk-kidbtn" data-action="pick-kid" data-kid="${k}" aria-pressed="${kidOf(cur) === k}" aria-label="${Celebrate.label(k)} character"><img src="${Celebrate.avatar(k)}" alt=""></button>`).join('')}
+      </div>
       ${cur.cards.length ? '<button class="bk-analytics-btn" type="button" data-action="open-analytics"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Analytics and price trends</button>' : ''}
       <div id="bkStage" class="bk-stage"></div>
       ${cur.cards.length ? `
@@ -1422,13 +1437,14 @@ document.addEventListener('click', async ev => {
     const b = store.collections.find(c => c.id === el.dataset.binder);
     toast(`Added to ${b ? b.name : 'binder'}`);
     renderDock();
-    Celebrate.show({ binder: b && b.name, card, tier: BinderUI.tierOf(card.rarity) });
+    Celebrate.show({ kid: kidOf(b), card, tier: BinderUI.tierOf(card.rarity) });
   }
   else if (a === 'check-update') {
     toast('Checking for updates…');
     try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch (e) { /* ignore */ }
     setTimeout(() => location.reload(), 600);
   }
+  else if (a === 'pick-kid') { store.setKid(currentBinder().id, el.dataset.kid); renderBinders(); }
   else if (a === 'open-analytics') Analytics.open(currentBinder().id);
   else if (a === 'bulk-pick') { const f = $('#bulkFile'); if (f) f.click(); }
   else if (a === 'open-binders') openBinders();
