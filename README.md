@@ -58,3 +58,9 @@ neither overwrites the other. A card whose total reaches 0 moves to the binder's
 the other phone), and a deleted binder is remembered in `gone`. `logic.js` has the merge (`mergeLibraries`);
 `app.js` syncs when the app opens, when it comes back to the front, 2 seconds after a change, and every 3 minutes.
 The Google Sheet script did not need to change.
+
+## TCGplayer prices for the web app (v2.4)
+
+Browsers aren't allowed to read TCGCSV (TCGplayer's daily price data) directly. `.github/workflows/prices.yml` runs
+`scripts/prices.mjs` every day: it saves a compact copy of the Pokémon prices to the `prices` branch (one commit,
+replaced each day), and the app reads it from raw.githubusercontent.com (`PRICE_COPY` in `logic.js`).

@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.3';
+const APP_VERSION = '2.4';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -123,19 +123,29 @@ const fx = {
 // if one is down or blocked, it is skipped for a few minutes and the next one is tried.
 const backup = { failedAt: {}, groups: null, groupData: new Map() };
 
+// TCGplayer's prices come from the daily copy in this app's own repo (see scripts/prices.mjs): browsers can't read
+// TCGCSV directly.
+async function copyJson(url, timeout) {
+  const r = await fetchTimeout(url, timeout);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
 function tcgcsvGroups() {
   if (!backup.groups) {
-    backup.groups = fetchTimeout(`${TCGCSV}/3/groups`, 12000).then(r => r.json()).then(j => j.results || [])
-      .catch(e => { backup.groups = null; throw e; });
+    backup.groups = copyJson(`${PRICE_COPY}/groups.json`, 12000).then(j => {
+      if (!j) throw new Error('the daily price copy is not there yet');
+      return expandGroups(j);
+    }).catch(e => { backup.groups = null; throw e; });
   }
   return backup.groups;
 }
 
 function tcgcsvGroupData(groupId) {
   if (!backup.groupData.has(groupId)) {
-    const get = what => fetchTimeout(`${TCGCSV}/3/${groupId}/${what}`, 25000).then(r => r.json()).then(j => j.results || []);
-    backup.groupData.set(groupId, Promise.all([get('products'), get('prices')])
-      .then(([products, prices]) => ({ products, prices }))
+    backup.groupData.set(groupId, copyJson(`${PRICE_COPY}/${groupId}.json`, 20000)
+      .then(j => expandGroupCopy(j))                     // a set with no single cards has no file: no products
       .catch(e => { backup.groupData.delete(groupId); throw e; }));
   }
   return backup.groupData.get(groupId);

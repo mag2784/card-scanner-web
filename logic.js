@@ -363,6 +363,20 @@ function rarityRank(r) {
 // ---------- backup price sources (used only when TCGdex has no TCGplayer price) ----------
 
 const TCGCSV = 'https://tcgcsv.com/tcgplayer';   // nightly copy of TCGplayer's catalog; category 3 = Pokémon (English)
+// Browsers can't read TCGCSV directly, so a daily GitHub Action copies it here (scripts/prices.mjs).
+const PRICE_COPY = 'https://raw.githubusercontent.com/mag2784/card-scanner-web/prices';
+
+/** The daily copy's set list -> TCGCSV's shape. */
+const expandGroups = j => ((j && j.groups) || []).map(([groupId, name, abbreviation]) => ({ groupId, name, abbreviation }));
+
+/** One set from the daily copy -> TCGCSV's { products, prices } shape, so the same matching code works on both. */
+function expandGroupCopy(j) {
+  const cards = (j && j.cards) || [];
+  return {
+    products: cards.map(([productId, cleanName, number]) => ({ productId, name: `${cleanName} - ${number}`, cleanName, extendedData: [{ name: 'Number', value: number }] })),
+    prices: cards.flatMap(([productId, , , ps]) => (ps || []).map(([subTypeName, marketPrice, lowPrice, highPrice]) => ({ productId, subTypeName, marketPrice, lowPrice, highPrice }))),
+  };
+}
 const PTCG = 'https://api.pokemontcg.io/v2';
 
 const SUBTYPE_LABELS = {
@@ -864,7 +878,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
-    findNumberTokens, bulkResolve, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
+    findNumberTokens, bulkResolve, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }
