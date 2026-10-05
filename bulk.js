@@ -139,7 +139,7 @@ const Bulk = (() => {
     const todo = st.items.filter(it => it.chosenId);
     if (!todo.length) return;
     st.adding = true; render();
-    let added = 0, top = null;
+    let added = 0, top = null, priciest = null;
     const perBinder = new Map();
     for (const it of todo) {
       let card = chosenCard(it);
@@ -149,9 +149,12 @@ const Bulk = (() => {
       for (let i = 0; i < it.qty; i++) store.add(it.binderId, card, variant);
       added += it.qty; perBinder.set(it.binderId, (perBinder.get(it.binderId) || 0) + it.qty);
       const worth = (variant && variant.market) || 0;
+      const v = cardValue(card, variant);
+      if (v != null && (priciest == null || v > priciest)) priciest = v;
       if (!top || rarityRank(card.rarity) > rarityRank(top.rarity) || (rarityRank(card.rarity) === rarityRank(top.rarity) && worth > top.worth)) top = { name: card.name, rarity: card.rarity, worth, binderId: it.binderId };
     }
     buzz();
+    if (added) Sounds.play(priciest);              // "omg" if any card added is worth more than $10
     const missed = todo.length - todo.filter(it => true).length;
     close();
     const bid = [...perBinder.entries()].sort((a, b) => b[1] - a[1])[0];

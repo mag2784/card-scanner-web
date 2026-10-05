@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.4';
+const APP_VERSION = '2.5';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -416,6 +416,14 @@ const store = {
     this.save();
   },
 };
+
+/** What one copy is worth in dollars, for the sound: the version's market price, a price you typed, or the euro price converted. */
+function cardValue(card, variant) {
+  if (variant && variant.market != null) return variant.market;
+  if (card.manualPrice != null) return card.manualPrice;
+  const e = eurPrice(card);
+  return e != null && fx.rate ? e * fx.rate : null;
+}
 
 /** The character that cheers for a binder: the one chosen on the binder screen, else the two take turns by binder order. */
 function kidOf(b) {
@@ -1451,6 +1459,7 @@ document.addEventListener('click', async ev => {
     const variant = card.prices[Math.min(s.variantIdx || 0, card.prices.length - 1)] || null;
     store.add(el.dataset.binder, card, variant);
     buzz();
+    Sounds.play(cardValue(card, variant));
     const b = store.collections.find(c => c.id === el.dataset.binder);
     toast(`Added to ${b ? b.name : 'binder'}`);
     renderDock();
