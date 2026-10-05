@@ -694,6 +694,104 @@ function bulkResolve(lines, words, cat, size) {
   return items;
 }
 
+
+/** JSON with sorted keys, so two copies of the same data compare equal. */
+function stableStringify(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  return JSON.stringify(v);
+}
+
+// ---------- two phones, one sheet: merging binders ----------
+//
+// Every phone keeps its own running count for each card: e.qd = { phoneId: [count, time] }. The quantity is the sum.
+// A phone only ever changes its own count, so merging two copies is simple and nothing is lost: for each phone, take the
+// newer of its two counts. Adding a card on two phones gives 2; removing it on one phone takes one away.
+// A card whose total is 0 moves to the binder's `dead` list (kept, so the removal still wins), a deleted binder is
+// remembered in `gone`.
+
+const qtyOf = e => (e.qd ? Object.values(e.qd).reduce((a, p) => a + p[0], 0) : (e.quantity || 0));
+
+/** Changes this phone's share of a card's count by `delta`, and the quantity with it. */
+function bumpQty(e, delta, dev, now) {
+  if (!e.qd) e.qd = { [dev]: [e.quantity || 0, e.addedAt || now] };    // a card saved by an older version: its count becomes this phone's
+  e.qd[dev] = [(e.qd[dev] ? e.qd[dev][0] : 0) + delta, now];
+  e.quantity = qtyOf(e);
+  return e;
+}
+
+/** Two price histories in one: every point once, oldest first, at most one real reading per ~6 hours. */
+function mergeHist(a, b) {
+  const all = [...(a || []), ...(b || [])].sort((x, y) => x[0] - y[0]);
+  const out = [];
+  for (const p of all) {
+    const last = out[out.length - 1];
+    if (last && last[0] === p[0]) continue;
+    if (last && !last[2] && !p[2] && p[0] - last[0] < 6 * 3600 * 1000) out[out.length - 1] = p;
+    else out.push(p);
+  }
+  return out.length > 400 ? out.slice(out.length - 400) : out;
+}
+
+/** One card from two copies (a = this phone's, b = the sheet's). */
+function mergeEntry(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  if (!a.qd && b.qd) return b;       // a copy from an older version gives way to one with per-phone counts
+  if (!b.qd) return a;               // (both old: keep this phone's; it gets its own counts afterwards)
+  const newer = (b.priceUpdatedAt || 0) > (a.priceUpdatedAt || 0) ? b : a, older = newer === a ? b : a;
+  const out = { ...older, ...newer };
+  const qd = {};
+  for (const d of new Set([...Object.keys(a.qd), ...Object.keys(b.qd)])) {
+    const x = a.qd[d], y = b.qd[d];
+    qd[d] = !x ? y : !y ? x : (y[1] > x[1] ? y : x);
+  }
+  out.qd = qd; out.quantity = qtyOf(out);
+  const first = (a.addedAt || Infinity) <= (b.addedAt || Infinity) ? a : b;
+  out.addedAt = first.addedAt;
+  if (first.priceWhenAdded != null) out.priceWhenAdded = first.priceWhenAdded;
+  const h = mergeHist(a.hist, b.hist);
+  if (h.length) out.hist = h;
+  return out;
+}
+
+function mergeBinder(a, b, id) {
+  if (!a || !b) { const x = a || b; return { ...x, id, cards: [...(x.cards || [])], dead: [...(x.dead || [])] }; }
+  const map = new Map();
+  for (const e of [...(a.cards || []), ...(a.dead || [])]) map.set(e.key, e);
+  for (const e of [...(b.cards || []), ...(b.dead || [])]) map.set(e.key, mergeEntry(map.get(e.key), e));
+  const all = [...map.values()];
+  const useB = (b.nameT || 0) > (a.nameT || 0);
+  const out = { ...b, ...a, id, name: useB ? b.name : a.name, cards: all.filter(e => qtyOf(e) > 0), dead: all.filter(e => qtyOf(e) <= 0 && e.qd) };
+  const nameT = Math.max(a.nameT || 0, b.nameT || 0); if (nameT) out.nameT = nameT;
+  const h = mergeHist(a.hist, b.hist); if (h.length) out.hist = h;
+  return out;
+}
+
+/**
+ * The binders from this phone (`local`) and the sheet (`remote`) in one. Binders match by id, or by name when the ids
+ * differ (a binder made separately on each phone). `dev` is this phone's id.
+ */
+function mergeLibraries(local, remote, dev, now) {
+  local = local || {}; remote = remote || {};
+  const gone = { ...(remote.gone || {}) };
+  for (const [id, t] of Object.entries(local.gone || {})) gone[id] = Math.max(gone[id] || 0, t);
+  const L = (local.collections || []).slice(), R = (remote.collections || []).slice();
+  const pairs = [];                               // [localBinder, remoteBinder, id]
+  const usedR = new Set();
+  for (const l of L) { const r = R.find(x => x.id === l.id); if (r) { pairs.push([l, r, r.id]); usedR.add(r); } }
+  for (const l of L) {
+    if (pairs.some(p => p[0] === l)) continue;
+    const r = R.find(x => !usedR.has(x) && String(x.name).trim().toLowerCase() === String(l.name).trim().toLowerCase() && !gone[x.id]);
+    if (r) { pairs.push([l, r, r.id]); usedR.add(r); } else pairs.push([l, null, l.id]);
+  }
+  for (const r of R) if (!usedR.has(r)) pairs.push([null, r, r.id]);
+  const collections = pairs.filter(p => !gone[p[2]] && !gone[(p[0] || {}).id]).map(([l, r, id]) => mergeBinder(l, r, id));
+  // cards still without per-phone counts (first time with this version) become this phone's
+  for (const c of collections) for (const e of c.cards) if (!e.qd) e.qd = { [dev]: [e.quantity || 0, e.addedAt || now] };
+  return { collections, gone };
+}
+
 // ---------- Pokémon names in English, Japanese and Chinese ----------
 
 /** "ミニリュウex" -> "ミニリュウ", "Pikachu ex" -> "Pikachu". A glued suffix only counts after a non-Latin letter. */
@@ -763,7 +861,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
-    findNumberTokens, bulkResolve,
+    findNumberTokens, bulkResolve, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }

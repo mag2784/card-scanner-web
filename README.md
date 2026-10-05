@@ -49,3 +49,12 @@ found, you can type in a price yourself; it's replaced automatically once a real
 | `app.js` | Camera, text recognition (Tesseract.js), results, binders, sheet backup |
 | `sw.js` | Offline support and quick updates |
 | `apps-script.txt` | Google Sheet backup script |
+
+## Two phones, one sheet (v2.0)
+
+Phones that use the same sheet link share the binders. Each phone keeps its own running count of every card
+(`qd` on a card: `{ phoneId: [count, time] }`); the quantity is the sum, so two phones adding the same card give 2 and
+neither overwrites the other. A card whose total reaches 0 moves to the binder's `dead` list (so the removal reaches
+the other phone), and a deleted binder is remembered in `gone`. `logic.js` has the merge (`mergeLibraries`);
+`app.js` syncs when the app opens, when it comes back to the front, 2 seconds after a change, and every 3 minutes.
+The Google Sheet script did not need to change.

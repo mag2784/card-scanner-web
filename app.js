@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.9';
+const APP_VERSION = '2.0';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -281,6 +281,13 @@ async function cardDetails(briefs) {
 }
 
 // ---------- binders (saved on the phone) ----------
+/** This phone's id, so two phones sharing a sheet each keep their own count of every card. */
+function deviceId() {
+  let d = localStorage.getItem('deviceId');
+  if (!d) { d = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); localStorage.setItem('deviceId', d); }
+  return d;
+}
+
 const store = {
   lib: null,
   init() {
@@ -289,24 +296,31 @@ const store = {
       this.lib = { collections: [{ id: uid(), name: 'My binder', cards: [] }] };
       this.save(false);
     }
-    this.lib.collections.forEach(c => { c.cards = c.cards || []; });
+    this.lib.collections.forEach(c => { c.cards = c.cards || []; c.dead = c.dead || []; });
+    this.lib.gone = this.lib.gone || {};
   },
   get collections() { return this.lib.collections; },
   save(push = true) {
     try { localStorage.setItem('library', JSON.stringify(this.lib)); } catch (e) { toast("Couldn't save on this phone."); }
     if (push) sync.schedule();
   },
-  replaceAll(collections) {
-    this.lib = { collections: collections.map(c => ({ ...c, cards: c.cards || [] })) };
+  /** Use this library as the phone's own (restoring from the sheet, or the result of a merge). */
+  replaceLib(lib) {
+    this.lib = { collections: (lib.collections || []).map(c => ({ ...c, cards: c.cards || [], dead: c.dead || [] })), gone: lib.gone || {} };
+    if (!this.lib.collections.length) this.lib.collections.push({ id: uid(), name: 'My binder', cards: [], dead: [] });
     this.save(false);
   },
   add(binderId, card, variant) {
     const c = this.collections.find(x => x.id === binderId);
     if (!c) return;
     const key = `${card.id}|${variant ? variant.label : ''}`;
-    const existing = c.cards.find(e => e.key === key);
+    let existing = c.cards.find(e => e.key === key);
     const now = Date.now();
-    if (existing) existing.quantity += 1;
+    if (!existing) {                                   // removed earlier? bring it back, with its history
+      const i = (c.dead || []).findIndex(e => e.key === key);
+      if (i >= 0) { existing = c.dead.splice(i, 1)[0]; c.cards.push(existing); }
+    }
+    if (existing) bumpQty(existing, 1, deviceId(), now);
     else {
       const real = variant && variant.market != null ? variant.market : marketPrice(card, null);
       const price = real ?? card.manualPrice ?? null;
@@ -314,7 +328,7 @@ const store = {
         key, cardId: card.id, name: card.name, setName: card.setName, number: card.number,
         setTotal: card.setTotal, rarity: card.rarity, imageSmall: card.imageSmall, imageLarge: card.imageLarge,
         group: card.group || null, kind: card.kind || null,
-        variant: variant ? variant.label : null, quantity: 1, addedAt: now,
+        variant: variant ? variant.label : null, quantity: 1, qd: { [deviceId()]: [1, now] }, addedAt: now,
         priceWhenAdded: price, price, priceUpdatedAt: now,
         ...(real == null && card.manualPrice != null ? { priceManual: true } : {}),
         language: card.lang, priceEur: eurPrice(card), priceEurWhenAdded: eurPrice(card),
@@ -325,8 +339,11 @@ const store = {
   setQuantity(binderId, key, qty) {
     const c = this.collections.find(x => x.id === binderId);
     if (!c) return;
-    if (qty <= 0) c.cards = c.cards.filter(e => e.key !== key);
-    else { const e = c.cards.find(x => x.key === key); if (e) e.quantity = qty; }
+    const i = c.cards.findIndex(e => e.key === key);
+    if (i < 0) return;
+    const e = c.cards[i], q = Math.max(0, qty);
+    bumpQty(e, q - e.quantity, deviceId(), Date.now());
+    if (q <= 0) { c.cards.splice(i, 1); (c.dead = c.dead || []).push(e); }      // kept, so the removal also reaches the other phone
     this.save();
   },
   applyPrices(fresh) {
@@ -370,10 +387,19 @@ const store = {
     }
   },
   addBinder(name) {
-    const c = { id: uid(), name, cards: [] };
+    const c = { id: uid(), name, cards: [], dead: [] };
     this.collections.push(c);
     this.save();
     return c;
+  },
+  renameBinder(id, name) {
+    const c = this.collections.find(x => x.id === id);
+    if (c) { c.name = name; c.nameT = Date.now(); this.save(); }
+  },
+  deleteBinder(id) {
+    this.lib.collections = this.collections.filter(c => c.id !== id);
+    this.lib.gone[id] = Date.now();                    // remembered, so the other phone doesn't bring it back
+    this.save();
   },
 };
 
@@ -424,51 +450,73 @@ const sync = {
   schedule() {
     if (!this.link) return;
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.push(), 2000);
+    this.timer = setTimeout(() => this.sync(), 2000);
+  },
+  /** Syncs when the app opens, when it comes back to the front, and every few minutes while it is open. */
+  start() {
+    if (this.started || !this.link) return;
+    this.started = true;
+    this.sync();
+    setInterval(() => { if (!document.hidden) this.sync(); }, 3 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - (this.status.last || 0) > 30 * 1000) this.sync(); });
   },
   markSynced() {
     this.status.last = Date.now();
     this.status.error = null;
     localStorage.setItem('syncLast', String(this.status.last));
   },
-  async push() {
+  /**
+   * Two-way sync: read the sheet, merge it with this phone's binders (nothing is lost on either side), keep the result here,
+   * and save it back if the sheet was missing anything. Several phones can do this at once; each converges on the same binders.
+   */
+  async sync() {
     const link = this.link;
     if (!link) return;
-    this.status.syncing = true; this.status.error = null; refreshSyncUi();
+    if (this.busy) { this.again = true; return; }
+    this.busy = true; this.status.syncing = true; this.status.error = null; refreshSyncUi();
     try {
-      await this.call(link, { action: 'save', library: store.lib });
+      const remote = await this.call(link, { action: 'load' });
+      const rl = remote.library || {};
+      const merged = mergeLibraries(store.lib, rl, deviceId(), Date.now());
+      if (stableStringify(merged) !== stableStringify(store.lib)) { store.replaceLib(merged); refreshAfterSync(); }
+      if (stableStringify({ collections: rl.collections || [], gone: rl.gone || {} }) !== stableStringify(merged)) {
+        await this.call(link, { action: 'save', library: merged });
+      }
       this.markSynced();
     } catch (e) {
       this.status.error = e.message || 'Sync failed. It will retry on the next change.';
     } finally {
-      this.status.syncing = false; refreshSyncUi();
+      this.busy = false; this.status.syncing = false; refreshSyncUi();
+      if (this.again) { this.again = false; this.schedule(); }
     }
   },
+  push() { return this.sync(); },
   async connect(raw) {
     const link = this.parse(raw);
     if (!link) throw new Error('That doesn\'t look like the script link. It starts with https://script.google.com/');
     const remote = await this.call(link, { action: 'load' });
     this.link = link;
-    const sheetCols = (remote.library && remote.library.collections) || [];
+    const rl = remote.library || {};
+    const sheetCols = rl.collections || [];
     const sheetCards = sheetCols.reduce((s, c) => s + (c.cards || []).reduce((a, e) => a + (e.quantity || 0), 0), 0);
     const phoneCards = store.collections.reduce((s, c) => s + count(c), 0);
-    if (sheetCards === 0) { await this.push(); return 'Connected! Your binders were saved to the sheet.'; }
-    if (phoneCards === 0) {
-      store.replaceAll(sheetCols); this.markSynced();
-      return `Connected and restored ${sheetCards} cards from the sheet.`;
+    this.started = false;
+    if (phoneCards === 0 && sheetCards > 0) {                  // a new phone: take the sheet's binders
+      store.replaceLib(rl); this.markSynced(); refreshAfterSync(); this.start();
+      return `Connected and loaded ${sheetCards} cards from the sheet.`;
     }
-    const useSheet = confirm(`The sheet has ${sheetCards} cards and this phone has ${phoneCards}.\n\nOK: use the sheet's binders.\nCancel: keep this phone's binders and update the sheet.`);
-    if (useSheet) { store.replaceAll(sheetCols); this.markSynced(); return 'Restored the binders from the sheet.'; }
-    await this.push();
-    return 'Kept this phone\'s binders and updated the sheet.';
+    await this.sync(); this.start();
+    if (this.status.error) throw new Error(this.status.error);
+    return sheetCards === 0 ? 'Connected! Your binders were saved to the sheet.'
+      : 'Connected. This phone\'s binders and the sheet\'s were combined, and they stay in step from now on.';
   },
   async restore() {
     const link = this.link;
     if (!link) return false;
     const remote = await this.call(link, { action: 'load' });
-    const cols = (remote.library && remote.library.collections) || [];
-    if (!cols.length) return false;
-    store.replaceAll(cols); this.markSynced();
+    const rl = remote.library || {};
+    if (!(rl.collections || []).length) return false;
+    store.replaceLib(rl); this.markSynced();
     return true;
   },
 };
@@ -1267,9 +1315,9 @@ function closeSheet() { $('#overlay').hidden = true; $('#overlay').innerHTML = '
 function backupStatus() {
   const s = sync.status;
   if (!sync.link) return 'Not connected yet.';
-  if (s.syncing) return 'Saving to the sheet…';
+  if (s.syncing) return 'Syncing with the sheet…';
   if (s.error) return `Last sync failed: ${esc(s.error)}`;
-  return `Connected. Last saved to the sheet ${timeAgo(s.last)}.`;
+  return `Connected. Last synced ${timeAgo(s.last)}. Phones that use this link share the binders.`;
 }
 
 function openBackup(note) {
@@ -1278,7 +1326,7 @@ function openBackup(note) {
   const link = sync.link;
   openSheet(`
     <h2 class="display">Google Sheet backup</h2>
-    <p class="muted">Keeps your binders in your own Google Sheet, so they survive a new phone or a cleared browser, and you can see them on any device.</p>
+    <p class="muted">Keeps your binders in your own Google Sheet, so they survive a new phone or a cleared browser. Use the same link on a second phone and you both see and change the same binders: what each phone adds or removes is combined, never overwritten.</p>
     <div class="tile" id="backup-status" style="${sync.status.error ? 'color:var(--error)' : ''}">${backupStatus()}</div>
     ${note ? `<p><b>${esc(note)}</b></p>` : ''}
     ${!link ? `
@@ -1302,6 +1350,15 @@ function openBackup(note) {
       <button class="text-btn" data-action="copy-link">Copy sync link for another phone</button>
       <button class="text-btn danger" data-action="disconnect">Disconnect this phone</button>`}
     <button class="btn btn-outline btn-block" style="margin-top:8px" data-action="close-sheet">Close</button>`);
+}
+
+/** Another phone's changes just arrived: redraw whatever is showing. */
+function refreshAfterSync() {
+  try {
+    if (app.view === 'binders') renderBinders();
+    const an = $('#analytics'); if (an && !an.hidden) Analytics.render();
+    if (app.scan.state === 'results') renderDock();
+  } catch (e) { /* the next screen change redraws */ }
 }
 
 function refreshSyncUi() {
@@ -1384,13 +1441,12 @@ document.addEventListener('click', async ev => {
   else if (a === 'rename-binder') {
     const cur = currentBinder();
     const name = (prompt('Rename this binder:', cur.name) || '').trim();
-    if (name) { cur.name = name.slice(0, 24); store.save(); renderBinders(); }
+    if (name) { store.renameBinder(cur.id, name.slice(0, 24)); renderBinders(); }
   }
   else if (a === 'delete-binder') {
     const cur = currentBinder();
     if (store.collections.length > 1 && confirm(`Delete "${cur.name}" and its ${count(cur)} cards? This can't be undone.`)) {
-      store.lib.collections = store.collections.filter(c => c !== cur);
-      store.save();
+      store.deleteBinder(cur.id);
       app.binderId = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true;
       renderBinders();
     }
@@ -1408,7 +1464,7 @@ document.addEventListener('click', async ev => {
     const l = sync.link;
     if (l && await copyText(`${l.url}?key=${l.key}`)) toast('Sync link copied. Keep it private.');
   }
-  else if (a === 'sync-now') { await sync.push(); openBackup(sync.status.error ? null : 'Saved to the sheet.'); }
+  else if (a === 'sync-now') { await sync.sync(); openBackup(sync.status.error ? null : 'Synced with the sheet.'); }
   else if (a === 'restore') {
     if (!confirm('Replace the binders on this phone with the ones saved in the Google Sheet?')) return;
     try {
@@ -1459,6 +1515,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- start ----------
 store.init();
+sync.start();
 fx.init();
 renderLang();
 renderDock();
