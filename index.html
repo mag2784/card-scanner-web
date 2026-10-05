@@ -59,7 +59,9 @@
     .pill { background: #fff; color: #5B3FFF; font-weight: 700; padding: 8px 14px; border-radius: 999px; }
     .segmented { display: flex; gap: 2px; padding: 4px; border-radius: 999px; background: rgba(0,0,0,.55); }
     .segmented button { color: #fff; font-weight: 700; padding: 7px 16px; border-radius: 999px; }
-    .segmented button[aria-pressed="true"] { background: #fff; color: #5B3FFF; }
+    .segmented button[aria-pressed="true"] { background: #fff; color: #5B3FFF; box-shadow: 0 0 0 2px #FFD36B; }
+    .segmented .seg-label { color: #fff; opacity: .85; font-weight: 700; font-size: 13px; padding: 7px 6px 7px 12px; align-self: center; }
+    .lang-tag { display: inline-block; background: #FFD36B; color: #2a1a63; border-radius: 6px; padding: 1px 7px; margin-right: 8px; font-size: 13px; letter-spacing: .5px; }
     .chip { color: #fff; background: rgba(0,0,0,.65); font-weight: 700; padding: 8px 16px; border-radius: 999px; max-width: 92%; text-align: center; }
     #scan-view.has-sheet .segmented, #scan-view.has-sheet .chip { display: none; }
 
@@ -182,7 +184,7 @@
         <button class="pill" data-action="open-binders">Binders</button>
       </div>
       <div id="lang-switch" class="segmented" role="group" aria-label="Card language"></div>
-      <div id="live" class="chip" aria-live="polite">Point at a card</div>
+      <div id="live" class="chip" aria-live="polite"><b class="lang-tag">EN</b>Point at a card</div>
     </header>
     <div id="dock" class="sheet"></div>
   </section>

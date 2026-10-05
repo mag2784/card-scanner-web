@@ -9,8 +9,8 @@ const API = 'https://api.tcgdex.net/v2';
 
 const LANGS = {
   en: { label: 'EN', codes: ['en'], tess: ['eng'], listName: 'card list' },
-  ja: { label: '日本語', codes: ['ja'], tess: ['jpn'], listName: 'Japanese card list' },
-  zh: { label: '中文', codes: ['zh-tw', 'zh-cn'], tess: ['chi_tra', 'chi_sim'], listName: 'Chinese card lists' },
+  ja: { label: 'JP', codes: ['ja'], tess: ['jpn'], listName: 'Japanese card list' },
+  zh: { label: 'CN', codes: ['zh-tw', 'zh-cn'], tess: ['chi_tra', 'chi_sim'], listName: 'Chinese card lists' },
 };
 
 // ---------- text helpers ----------

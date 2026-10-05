@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -818,7 +818,12 @@ async function scanLoop() {
 }
 
 // ---------- rendering: scanner ----------
-function setLive(text) { $('#live').textContent = text || 'Point at a card'; }
+/** The pill above the viewfinder: the language being scanned (EN / JP / CN), then what the camera reads. */
+function setLive(text) {
+  const el = $('#live');
+  el.dataset.text = text || '';
+  el.innerHTML = `<b class="lang-tag" aria-label="Scanning ${esc(LANGS[app.lang].label)} cards">${esc(LANGS[app.lang].label)}</b>${esc(text || 'Point at a card')}`;
+}
 
 function setScan(s) {
   if (s.state === 'results' && app.scan.state !== 'results') buzz();
@@ -829,8 +834,10 @@ function setScan(s) {
 }
 
 function renderLang() {
-  $('#lang-switch').innerHTML = Object.entries(LANGS).map(([k, l]) =>
+  $('#lang-switch').innerHTML = '<span class="seg-label">Card language</span>' + Object.entries(LANGS).map(([k, l]) =>
     `<button data-action="lang" data-lang="${k}" aria-pressed="${k === app.lang}">${esc(l.label)}</button>`).join('');
+  const live = $('#live');
+  if (live) setLive(live.dataset.text || '');
 }
 
 /** "Wrong name or number? Edit and search again" */
