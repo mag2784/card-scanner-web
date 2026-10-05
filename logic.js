@@ -695,10 +695,10 @@ function bulkResolve(lines, words, cat, size) {
 }
 
 
-/** JSON with sorted keys, so two copies of the same data compare equal. */
+/** JSON with sorted keys, ignoring empty values, so two copies of the same data compare equal (the Android app leaves nulls out). */
 function stableStringify(v) {
   if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
-  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined && v[k] !== null).map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
   return JSON.stringify(v);
 }
 
