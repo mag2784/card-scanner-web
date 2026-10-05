@@ -125,6 +125,11 @@
     .add-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
     .add-row .btn { flex: 1 1 40%; color: #fff; }
     h3 { font-size: 18px; margin: 22px 0 8px; }
+    .qr-box { display: grid; place-items: center; margin: 14px auto; width: 270px; height: 270px; background: #fff; border-radius: 14px; }
+    .qr-box svg { width: 260px; height: 260px; display: block; }
+    .qr-scan { position: relative; margin: 12px 0; border-radius: 16px; overflow: hidden; background: #000; aspect-ratio: 4/3; }
+    .qr-scan video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .qr-frame { position: absolute; inset: 18%; border: 3px solid rgba(255,255,255,.85); border-radius: 14px; box-shadow: 0 0 0 999px rgba(0,0,0,.25); }
     .foil .noimg { position: absolute; inset: 0; display: grid; place-items: center; padding: 10px; text-align: center; font: 22px/1.1 var(--display); color: var(--ink-soft); background: var(--tile); }
     .thumb-add { display: grid; place-items: center; width: 100%; height: 100%; padding: 4px; text-align: center; font-weight: 700; font-size: 12px; line-height: 1.15; color: var(--violet); }
 
@@ -214,6 +219,7 @@
   <script src="binder.js"></script>
   <script src="celebrate.js"></script>
   <script src="sounds.js"></script>
+  <script src="qrlink.js"></script>
   <script src="analytics.js"></script>
   <script src="bulk.js"></script>
   <script src="app.js"></script>

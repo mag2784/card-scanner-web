@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.5';
+const APP_VERSION = '2.6';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -454,7 +454,10 @@ const sync = {
 
   /** Web app URL from the Deploy dialog, or the full link (with ?key=) from the sheet's Setup tab. */
   parse(raw) {
-    const s = String(raw || '').trim();
+    // forgiving for typed links: spaces, a missing "https://", a capital first letter from the keyboard
+    let s = String(raw || '').replace(/\s+/g, '');
+    if (/^script\.google\.com\//i.test(s)) s = 'https://' + s;
+    s = s.replace(/^https?:\/\/script\.google\.com\//i, 'https://script.google.com/');
     if (!s.startsWith('https://script.google.com/')) return null;
     const [url, query = ''] = s.split('?');
     const key = new URLSearchParams(query).get('key') || randomKey();
@@ -1350,7 +1353,14 @@ function openSheet(html) {
   o.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="handle"></div>${html}</div>`;
   o.hidden = false;
 }
-function closeSheet() { $('#overlay').hidden = true; $('#overlay').innerHTML = ''; app.sheet = null; app.detail = null; }
+function closeSheet() { endQrScan(); $('#overlay').hidden = true; $('#overlay').innerHTML = ''; app.sheet = null; app.detail = null; }
+
+/** Stops a QR scan, and gives the card scanner its camera back. */
+function endQrScan() {
+  if (!QRLink.scanning) return;
+  QRLink.stop();
+  if (app.view === 'scan' && !camera.on) camera.start().catch(() => {});
+}
 
 function backupStatus() {
   const s = sync.status;
@@ -1370,6 +1380,11 @@ function openBackup(note) {
     <div class="tile" id="backup-status" style="${sync.status.error ? 'color:var(--error)' : ''}">${backupStatus()}</div>
     ${note ? `<p><b>${esc(note)}</b></p>` : ''}
     ${!link ? `
+      <div class="tile" style="margin-top:12px">
+        <b>Already set up on another phone or tablet?</b>
+        <p class="small muted" style="margin:4px 0 10px">On that device open Back up and tap <b>Show QR code for another device</b>, then scan it here. No typing.</p>
+        <button class="btn btn-primary btn-block" data-action="scan-qr">Scan a QR code from another device</button>
+      </div>
       <h3>One-time setup (about 10 minutes)</h3>
       <ol class="steps">
         <li><a href="https://sheets.new" target="_blank" rel="noopener">Create a new Google Sheet</a> and give it a name, like "Card binders".</li>
@@ -1379,7 +1394,7 @@ function openBackup(note) {
         <li>Copy the <b>Web app URL</b> (ends in <code>/exec</code>) and paste it below.</li>
       </ol>
       <form data-form="connect">
-        <input class="field" name="link" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+        <input class="field" name="link" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
         <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">Connect</button>
       </form>
       <p class="small muted">Setting up a second phone, or reinstalled? Paste the link from the <b>Setup</b> tab of your sheet instead.</p>` : `
@@ -1387,6 +1402,7 @@ function openBackup(note) {
         <button class="btn btn-primary grow" data-action="sync-now">Sync now</button>
         <button class="btn btn-outline grow" data-action="restore">Restore</button>
       </div>
+      <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="show-qr">Show QR code for another device</button>
       <button class="text-btn" data-action="copy-link">Copy sync link for another phone</button>
       <button class="text-btn danger" data-action="disconnect">Disconnect this phone</button>`}
     <button class="btn btn-outline btn-block" style="margin-top:8px" data-action="close-sheet">Close</button>`);
@@ -1502,6 +1518,40 @@ document.addEventListener('click', async ev => {
     if (app.scriptText && await copyText(app.scriptText)) toast('Script copied. Paste it into Apps Script.');
     else window.open('apps-script.txt', '_blank');   // fallback: open it to copy by hand
   }
+  else if (a === 'show-qr') {
+    const l = sync.link;
+    if (!l) return;
+    openSheet(`<h2 class="display">Connect another device</h2>
+      <div class="qr-box" id="qrBox"><div class="spinner"></div></div>
+      <p>On the other phone or tablet, open the Card Scanner web app, tap <b>Binders</b>, then <b>Back up</b>, then <b>Scan a QR code from another device</b>, and point it at this code.</p>
+      <p class="small muted">This code is the key to your binders. Only show it to your own family's devices.</p>
+      <button class="btn btn-outline btn-block" data-action="open-backup">Back</button>`);
+    try { $('#qrBox').innerHTML = await QRLink.svg(`${l.url}?key=${l.key}`); } catch (e) { $('#qrBox').textContent = "Couldn't make the QR code. Use Copy sync link instead."; }
+  }
+  else if (a === 'scan-qr') {
+    if (app.view === 'scan') camera.stop();          // one camera user at a time
+    openSheet(`<h2 class="display">Scan the QR code</h2>
+      <div class="qr-scan"><video id="qrVideo" playsinline muted></video><div class="qr-frame"></div></div>
+      <p id="qrMsg">Point the camera at the QR code on the other device.</p>
+      <button class="btn btn-outline btn-block" data-action="qr-cancel">Cancel</button>`);
+    app.sheet = { type: 'qr' };
+    QRLink.scan($('#qrVideo'), async link => {
+      const msg = $('#qrMsg'); if (msg) msg.textContent = 'Found it. Connecting…';
+      try {
+        const note = await sync.connect(link);
+        app.binderId = null; app.bookOpened = false; app.bookPage = 1;
+        if (app.view === 'binders') renderBinders();
+        endQrScan(); openBackup(note);
+      } catch (err) {
+        endQrScan(); openBackup(null);
+        toast(err.message || "Couldn't connect with that code.");
+      }
+    }).catch(err => {
+      const msg = $('#qrMsg');
+      if (msg) msg.textContent = `Couldn't open the camera (${err.message || err.name}). Allow camera access for this site, or type the link instead.`;
+    });
+  }
+  else if (a === 'qr-cancel') { endQrScan(); openBackup(); }
   else if (a === 'copy-link') {
     const l = sync.link;
     if (l && await copyText(`${l.url}?key=${l.key}`)) toast('Sync link copied. Keep it private.');
@@ -1558,6 +1608,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- start ----------
 store.init();
 sync.start();
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 fx.init();
 renderLang();
 renderDock();
