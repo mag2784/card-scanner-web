@@ -604,6 +604,96 @@ function binderAnalytics(entries, now, rate) {
   };
 }
 
+
+// ---------- bulk: many cards in one photo ----------
+
+const median0 = a => { const s = a.slice().sort((x, y) => x - y); if (!s.length) return null; const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+/**
+ * Collector numbers with their positions, from OCR words ({ text, x0, y0, x1, y1 }). "091/129" may come as one word or as
+ * "091", "/", "129". A set size is required: a lone "12" is too easy to misread.
+ */
+function findNumberTokens(words) {
+  const ws = (words || []).filter(w => w && w.text && w.x1 > w.x0);
+  const out = [], used = new Set();
+  for (let i = 0; i < ws.length; i++) {
+    if (used.has(i)) continue;
+    for (const span of [1, 2, 3]) {
+      const part = ws.slice(i, i + span);
+      if (part.length < span) break;
+      if (span > 1) {
+        const h = Math.max(...part.map(w => w.y1 - w.y0));
+        const cy0 = (part[0].y0 + part[0].y1) / 2;
+        const ok = part.every((w, k) => k === 0 || (Math.abs((w.y0 + w.y1) / 2 - cy0) < h * 0.6 && w.x0 - part[k - 1].x1 < h * 1.6 && w.x0 >= part[k - 1].x0));
+        if (!ok) break;
+      }
+      const p = parseNumber(part.map(w => w.text).join(''));
+      if (p && p.total) {
+        const x0 = Math.min(...part.map(w => w.x0)), x1 = Math.max(...part.map(w => w.x1)), y0 = Math.min(...part.map(w => w.y0)), y1 = Math.max(...part.map(w => w.y1));
+        out.push({ number: p.number, total: p.total, x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, h: y1 - y0 });
+        for (let k = 0; k < span; k++) used.add(i + k);
+        break;
+      }
+    }
+  }
+  // the same number seen twice in the overlap between two tiles of one photo
+  return out.filter((t, i) => !out.slice(0, i).some(u => u.number === t.number && u.total === t.total && Math.abs(u.cx - t.cx) < Math.max(u.h, t.h) * 3 && Math.abs(u.cy - t.cy) < Math.max(u.h, t.h) * 2));
+}
+
+/**
+ * Finds every card in one OCR'd photo (a single card, a binder page, cards laid out on a table) and matches each to the
+ * catalog: each collector number is a card; its set size narrows the candidates; the names printed above it pick between
+ * the few that remain. lines / words: { text, x0, y0, x1, y1 } in image pixels. Returns items in reading order:
+ *   { number, total, status: 'matched' | 'pick' | 'unknown', candidates, chosen, evidence, x, y }
+ */
+function bulkResolve(lines, words, cat, size) {
+  const toks = findNumberTokens(words);
+  if (!toks.length) return [];
+  toks.sort((a, b) => a.cy - b.cy);
+  // rows: numbers at about the same height belong to one row of cards
+  const rowTol = Math.max(0.07 * size.h, 2.5 * median0(toks.map(t => t.h)));
+  const rows = [];
+  for (const t of toks) {
+    const r = rows[rows.length - 1];
+    if (r && t.cy - r.cy0 <= rowTol) { r.items.push(t); r.cy0 = (r.cy0 * (r.items.length - 1) + t.cy) / r.items.length; } else rows.push({ cy0: t.cy, items: [t] });
+  }
+  rows.forEach(r => r.items.sort((a, b) => a.cx - b.cx));
+  const rowPitch = rows.length > 1 ? median0(rows.slice(1).map((r, i) => r.cy0 - rows[i].cy0)) : null;
+  const colGaps = rows.flatMap(r => r.items.slice(1).map((t, i) => t.cx - r.items[i].cx));
+  const pitchX = colGaps.length ? median0(colGaps) : size.w / Math.max(...rows.map(r => r.items.length));
+  const cardH = rowPitch || pitchX * 88 / 63;
+
+  // each text line goes to the card whose number is below it: close in x, one card height away in y
+  const own = new Map(toks.map(t => [t, []]));
+  for (const l of lines || []) {
+    if (!l || !l.text) continue;
+    const lx = (l.x0 + l.x1) / 2, ly = (l.y0 + l.y1) / 2;
+    let best = null, bc = Infinity;
+    for (const t of toks) {
+      const dy = t.cy - ly;
+      if (dy < t.h || dy > 1.2 * cardH) continue;
+      const c = Math.abs(lx - t.cx) / pitchX + 0.35 * dy / cardH;
+      if (c < bc && Math.abs(lx - t.cx) < 1.1 * pitchX) { bc = c; best = t; }
+    }
+    if (best) own.get(best).push(l.text);
+  }
+
+  const items = [];
+  for (const r of rows) for (const t of r.items) {
+    const found = cat.candidates(t.number, t.total);
+    const cands = found.cards.slice(0, 40);
+    const evidence = own.get(t) || [];
+    let chosen = null, status = 'unknown';
+    if (cands.length === 1) { chosen = cands[0]; status = 'matched'; }
+    else if (cands.length > 1) {
+      chosen = pickCandidate(cands, evidence);
+      status = chosen ? 'matched' : 'pick';
+    }
+    items.push({ number: t.number, total: t.total, status, candidates: cands, chosen, evidence, x: t.cx, y: t.cy, setMatched: found.setMatched });
+  }
+  return items;
+}
+
 // ---------- Pokémon names in English, Japanese and Chinese ----------
 
 /** "ミニリュウex" -> "ミニリュウ", "Pikachu ex" -> "Pikachu". A glued suffix only counts after a non-Latin letter. */
@@ -673,6 +763,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
+    findNumberTokens, bulkResolve,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }

@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.9';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -737,7 +737,7 @@ function showCandidates(cands, chosen, exact, label, read) {
 
 async function scanLoop() {
   for (;;) {
-    if (!camera.on || app.view !== 'scan' || app.scan.state !== 'scanning' || document.hidden || typeof Tesseract === 'undefined') {
+    if (!camera.on || app.view !== 'scan' || app.scan.state !== 'scanning' || document.hidden || typeof Tesseract === 'undefined' || Bulk.active()) {
       await sleep(300);
       continue;
     }
@@ -817,6 +817,7 @@ function renderDock() {
         <input class="field grow" name="q" placeholder="${app.lang === 'en' ? 'Name and number, e.g. Pikachu 28/131' : 'English name or number, e.g. Dragonair 91/129'}" autocomplete="off" enterkeyhint="search">
         <button class="btn btn-primary" type="submit">Search</button>
       </form>
+      <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="bulk-pick"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-4px;margin-right:8px"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>Upload photos of cards</button>
       <div class="row small muted" style="margin-top:10px">
         <span class="grow">Version ${APP_VERSION}</span>
         <button class="text-btn small" data-action="check-update">Check for updates</button>
@@ -1372,6 +1373,7 @@ document.addEventListener('click', async ev => {
     setTimeout(() => location.reload(), 600);
   }
   else if (a === 'open-analytics') Analytics.open(currentBinder().id);
+  else if (a === 'bulk-pick') { const f = $('#bulkFile'); if (f) f.click(); }
   else if (a === 'open-binders') openBinders();
   else if (a === 'close-binders') closeBinders();
   else if (a === 'binder') { app.binderId = el.dataset.id; app.rarity = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true; renderBinders(); maybeRefresh(); }
@@ -1466,3 +1468,12 @@ setTimeout(() => species.load(), 1200);
 scanLoop();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// the file picker for bulk upload: one handler for the scan screen and for "Add more photos"
+document.addEventListener('change', ev => {
+  if (ev.target && ev.target.id === 'bulkFile') {
+    const files = [...ev.target.files]; ev.target.value = '';
+    if (!files.length) return;
+    if (Bulk.active() && Bulk.state && Bulk.state.phase === 'review') Bulk.more(files); else Bulk.start(files);
+  }
+});

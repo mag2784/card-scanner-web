@@ -1,0 +1,35 @@
+/* Bulk upload review screen (bulk.js): night theme like the binders */
+#bulk{position:fixed;inset:0;z-index:45;overflow-y:auto;-webkit-overflow-scrolling:touch;color:#F4F2FF;background:radial-gradient(120% 60% at 50% 0%,#33237a 0%,#0D0A1F 62%);
+  padding:calc(var(--safe-top,0px) + 10px) 14px calc(var(--safe-bottom,0px) + 110px)}
+#bulk[hidden]{display:none}
+.bulk-wrap{max-width:560px;margin:0 auto}.bulk-center{min-height:70vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px}
+.bulk-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.bulk-back{display:flex;align-items:center;gap:4px;color:#fff;font-weight:700;font-size:16px;padding:10px 6px 10px 0}
+.bulk-pill{background:#fff;color:#5B3FFF;font-weight:700;border-radius:999px;padding:9px 16px;font-size:15px}
+.bulk-title{font:30px/1.1 var(--display,system-ui);margin:8px 0 6px}
+.bulk-note{color:#B7B0E0;font-size:14.5px;line-height:1.4;margin:6px 0}
+.bulk-warn{background:rgba(255,211,107,.14);border:1px solid rgba(255,211,107,.5);color:#FFE6A3;border-radius:12px;padding:10px 12px;margin:8px 0;font-size:14.5px}
+.bulk-group{margin:14px 0}.bulk-gh{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.bulk-group h3{font:21px/1.2 var(--display,system-ui);margin:0}.bulk-group h3 small{font:14px var(--body,system-ui);color:#B7B0E0;margin-left:8px}
+.bulk-gb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:14px;color:#B7B0E0}
+.bulk-chip{display:inline-flex;align-items:center;gap:6px;border:1.5px solid rgba(255,255,255,.26);color:#E8E4FF;border-radius:999px;padding:5px 11px 5px 6px;font-weight:700;font-size:13.5px}
+.bulk-chip img{width:22px;height:22px;border-radius:50%}.bulk-chip:not(:has(img)){padding-left:11px}
+.bulk-chip[aria-pressed=true]{border-color:#FFD36B;color:#FFD36B;background:rgba(255,255,255,.1)}
+.bulk-item{display:flex;gap:12px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:12px;margin:10px 0}
+.bulk-item[data-status=unknown]{border-color:rgba(255,138,155,.6)}.bulk-item[data-status=pick]{border-color:rgba(255,211,107,.6)}
+.bulk-thumb{width:64px;flex:none;aspect-ratio:63/88;border-radius:6px;object-fit:cover;background:rgba(255,255,255,.12);display:grid;place-items:center;font:700 22px var(--display,system-ui);color:#B7B0E0}
+.bulk-main{flex:1;min-width:0}.bulk-name{font:21px/1.15 var(--display,system-ui)}
+.bulk-sub{color:#CFC9F2;font-size:14px;margin-top:3px;line-height:1.35}.bulk-price{color:#3EE0A5;font-weight:700}
+.bulk-price select{margin-left:8px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:3px 6px;font-size:13px}
+.bulk-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+.bulk-link{color:#FFD36B;font-weight:700;font-size:14.5px;padding:6px 0;text-align:left}
+.bulk-thumbs{display:flex;gap:8px;overflow-x:auto;margin:8px 0 2px;padding-bottom:4px}
+.bulk-thumbs button{flex:none;width:66px;aspect-ratio:63/88;border-radius:6px;overflow:hidden;background:rgba(255,255,255,.12);border:2px solid transparent;font-size:11px;color:#E8E4FF;padding:2px}
+.bulk-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
+.bulk-side{display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:8px}
+.bulk-x{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:20px;line-height:1}
+.bulk-qty{display:flex;align-items:center;gap:6px}.bulk-qty button{width:30px;height:30px;border-radius:50%;border:1.5px solid rgba(255,255,255,.32);color:#fff;font-size:18px}.bulk-qty button[disabled]{opacity:.3}
+.bulk-edit{margin:6px 0}.bulk-edit label{display:block;font-size:13px;color:#B7B0E0}.bulk-edit .field{display:block;width:100%;margin-top:4px}
+.bulk-bar{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:560px;margin:0 auto;
+  padding:12px 14px calc(var(--safe-bottom,0px) + 12px);background:rgba(13,10,31,.94);border-top:1px solid rgba(255,255,255,.14)}
+.bulk-bar b{display:block;font-size:16px}.bulk-bar small{color:#B7B0E0;font-size:13px}.bulk-bar .btn[disabled]{opacity:.45}
