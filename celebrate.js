@@ -7,8 +7,8 @@
  */
 const Celebrate = (() => {
   const KIDS = {
-    harper: { img: 'char-harper.webp', side: 'left' },
-    jaxon: { img: 'char-jaxon.webp', side: 'right' },
+    harper: { img: 'char-harper.webp', thumb: 'thumbs-harper.webp', side: 'left' },
+    jaxon: { img: 'char-jaxon.webp', thumb: 'thumbs-jaxon.webp', side: 'right' },
   };
   const LINES = {
     common: ['Nice one!', 'Into the binder!', 'Yay!', 'Got it!'],
@@ -94,9 +94,9 @@ const Celebrate = (() => {
     const host = behind ? el.closest('#scan-view') : document.body;
     root.style.position = host === document.body ? 'fixed' : 'absolute';
     root.innerHTML = `<div class="cele-kid ${k.side}" style="top:${top}px;height:${H}px">
-      <img src="${k.img}" alt="" draggable="false"><div class="cele-bubble">${String(line).replace(/[<>&]/g, '')}</div></div>`;
+      <img class="cele-kidimg" src="${k.img}" alt="" draggable="false"><img class="cele-thumb" src="${k.thumb}" alt="" draggable="false"><div class="cele-bubble">${String(line).replace(/[<>&]/g, '')}</div></div>`;
     host.appendChild(root);
-    const kidEl = root.firstElementChild, bubble = kidEl.querySelector('.cele-bubble');
+    const kidEl = root.firstElementChild, bubble = kidEl.querySelector('.cele-bubble'), thumb = kidEl.querySelector('.cele-thumb');
     const D = reduce ? 1600 : 2700;
     if (reduce) {
       kidEl.animate([{ opacity: 0 }, { opacity: 1, offset: .15 }, { opacity: 1, offset: .85 }, { opacity: 0 }], { duration: D });
@@ -114,6 +114,14 @@ const Celebrate = (() => {
         { transform: 'translateY(108%)', offset: 1 },
       ], { duration: D, easing: 'cubic-bezier(.3,.7,.3,1)' });
     }
+    // the drawn thumbs-up pops in next to the kid and stays until the kid goes
+    if (reduce) thumb.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 300, fill: 'both' });
+    else thumb.animate([
+      { transform: 'scale(0) rotate(-24deg)', opacity: 0, offset: 0 },
+      { transform: 'scale(1.22) rotate(7deg)', opacity: 1, offset: .55 },
+      { transform: 'scale(.95) rotate(-5deg)', opacity: 1, offset: .8 },
+      { transform: 'scale(1) rotate(-3deg)', opacity: 1, offset: 1 },
+    ], { duration: 560, delay: 760, easing: 'cubic-bezier(.3,.7,.3,1)', fill: 'both' });
     bubble.animate([{ transform: 'scale(0)', opacity: 0 }, { transform: 'scale(1.12)', opacity: 1, offset: .14 }, { transform: 'scale(1)', opacity: 1, offset: .22 },
       { transform: 'scale(1)', opacity: 1, offset: .8 }, { transform: 'scale(.6)', opacity: 0 }], { duration: D - 500, delay: 420, fill: 'both' });
     timer = setTimeout(() => root.remove(), D + 120);

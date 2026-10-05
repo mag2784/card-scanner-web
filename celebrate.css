@@ -1,8 +1,10 @@
 /* Harper and Jaxon cheering from behind the bottom sheet (see celebrate.js) */
 .cele{position:fixed;inset:0;pointer-events:none;z-index:var(--z,3);overflow:hidden}
 .cele-kid{position:absolute;transform-origin:50% 100%;will-change:transform}
-.cele-kid img{height:100%;display:block;filter:drop-shadow(0 6px 10px rgba(30,10,70,.35));user-select:none;-webkit-user-select:none}
+.cele-kidimg{height:100%;display:block;filter:drop-shadow(0 6px 10px rgba(30,10,70,.35));user-select:none;-webkit-user-select:none}
 .cele-kid.left{left:10px}.cele-kid.right{right:10px}
+.cele-thumb{position:absolute;bottom:30%;height:42%;width:auto;transform-origin:50% 90%;filter:drop-shadow(0 4px 6px rgba(30,10,70,.4));user-select:none;-webkit-user-select:none}
+.cele-kid.left .cele-thumb{right:-30%}.cele-kid.right .cele-thumb{left:-30%}
 .cele-bubble{position:absolute;top:4%;max-width:52vw;width:max-content;padding:9px 14px;border-radius:18px;background:#fff;color:#2a1a63;
   font:700 18px/1.15 var(--display,system-ui);box-shadow:0 6px 16px rgba(30,10,70,.3);transform-origin:0% 60%}
 .cele-kid.left .cele-bubble{left:calc(100% - 6px)}
