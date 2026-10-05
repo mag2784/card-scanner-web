@@ -301,6 +301,8 @@ function toCard(r, lang) {
     prices,
     tcgUpdated: tp && typeof tp.updated === 'string' ? tp.updated.slice(0, 10) : null,
     cmTrend: pos(cm && cm.trend),
+    cmAvg1: pos(cm && cm.avg1),
+    cmAvg7: pos(cm && cm.avg7),
     cmAvg30: pos(cm && cm.avg30),
     cmTrendHolo: pos(cm && cm['trend-holo']),
     lang: lang || 'en',
@@ -440,6 +442,168 @@ function parseMoney(input) {
 }
 
 
+
+// ---------- analytics: price history, trends and breakdowns ----------
+
+const DAY = 86400000;
+
+/** Adds a point to a history: one point a day (a newer reading the same day replaces it), newest last, at most `cap`. */
+function pushPoint(hist, t, v, minGap = 20 * 3600 * 1000, cap = 400) {
+  const h = (hist || []).slice();
+  if (v == null || !isFinite(v)) return h;
+  const last = h[h.length - 1];
+  if (last && !last[2] && t - last[0] < minGap) h[h.length - 1] = [t, v];
+  else h.push([t, v]);
+  return h.length > cap ? h.slice(h.length - cap) : h;
+}
+
+/** The price of one copy at time t: a straight line between the two nearest points, flat before the first and after the last. */
+function priceAt(hist, t) {
+  if (!hist || !hist.length) return null;
+  if (t <= hist[0][0]) return hist[0][1];
+  const last = hist[hist.length - 1];
+  if (t >= last[0]) return last[1];
+  for (let i = 1; i < hist.length; i++) {
+    if (t <= hist[i][0]) {
+      const [t0, v0] = hist[i - 1], [t1, v1] = hist[i];
+      return t1 === t0 ? v1 : v0 + (v1 - v0) * (t - t0) / (t1 - t0);
+    }
+  }
+  return last[1];
+}
+
+/**
+ * Where the price was 1, 7 and 30 days ago, estimated from Cardmarket's averages (EUR) by assuming the dollar price moved
+ * by the same percentage. cm = { trend, avg1, avg7, avg30 }. Oldest first; every point is flagged as an estimate.
+ */
+function cmEstimate(now, usdNow, cm) {
+  if (!(usdNow > 0) || !cm || !(cm.trend > 0)) return [];
+  const out = [];
+  for (const [days, avg] of [[30, cm.avg30], [7, cm.avg7], [1, cm.avg1]]) {
+    if (avg > 0) { const r = avg / cm.trend; if (r > .2 && r < 5) out.push([now - days * DAY, usdNow * r, 1]); }
+  }
+  return out;
+}
+
+/** A card's whole history: the Cardmarket estimates that come before its first real reading, then the real readings. */
+function fullHist(e) {
+  const real = e.hist || [];
+  const firstReal = real.length ? real[0][0] : Infinity;
+  return [...(e.est || []).filter(p => p[0] < firstReal), ...real];
+}
+
+/** Value of one copy now: its US price, or the euro price converted. */
+function unitValue(e, rate) {
+  if (e.price != null) return e.price;
+  return e.priceEur != null && rate ? e.priceEur * rate : null;
+}
+
+/**
+ * How a card's price changed over the last `days` days: { from, to, abs, pct, estimated }, or null when the history is
+ * too short (less than half the window) to say.
+ */
+function movement(e, now, days, rate) {
+  const h = fullHist(e);
+  const to = unitValue(e, rate);
+  if (!h.length || to == null) return null;
+  if ((now - h[0][0]) < days * DAY * 0.5) return null;
+  const t0 = now - days * DAY;
+  const from = priceAt(h, t0);
+  if (from == null || from <= 0) return null;
+  const nearest = h.filter(p => p[0] <= t0).pop() || h[0];
+  return { from, to, abs: to - from, pct: (to - from) / from * 100, estimated: !!nearest[2] || h[0][0] > t0 - DAY && !!h[0][2] };
+}
+
+/** Change since the card was added to the binder. */
+function sinceAdded(e, rate) {
+  const to = unitValue(e, rate);
+  if (to == null || e.priceWhenAdded == null || e.priceWhenAdded <= 0) return null;
+  return { from: e.priceWhenAdded, to, abs: to - e.priceWhenAdded, pct: (to - e.priceWhenAdded) / e.priceWhenAdded * 100 };
+}
+
+/** What the cards you have now were worth at past prices: n points between `from` and `to`. */
+function holdingsSeries(entries, from, to, n, rate) {
+  const hs = entries.map(e => ({ h: fullHist(e), q: e.quantity || 1, now: unitValue(e, rate) }));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = from + (to - from) * i / (n - 1);
+    let total = 0;
+    for (const x of hs) {
+      const v = x.h.length ? priceAt(x.h, t) : x.now;
+      if (v != null) total += v * x.q;
+    }
+    out.push([t, total]);
+  }
+  return out;
+}
+
+const median = a => { const s = a.filter(x => x != null).sort((x, y) => x - y); if (!s.length) return null; const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+const VALUE_BUCKETS = [[0, 1, 'Under $1'], [1, 5, '$1 – $5'], [5, 20, '$5 – $20'], [20, 100, '$20 – $100'], [100, Infinity, '$100 and up']];
+
+/** Everything the analytics screen shows, from a binder's cards. */
+function binderAnalytics(entries, now, rate) {
+  const q = e => e.quantity || 1;
+  const val = e => unitValue(e, rate);
+  const priced = entries.filter(e => val(e) != null);
+  const total = priced.reduce((a, e) => a + val(e) * q(e), 0);
+  const converted = entries.filter(e => e.price == null && e.priceEur != null && rate).reduce((a, e) => a + e.priceEur * rate * q(e), 0);
+  const costed = entries.filter(e => e.priceWhenAdded != null && val(e) != null);
+  const cost = costed.reduce((a, e) => a + e.priceWhenAdded * q(e), 0);
+  const worthOfCosted = costed.reduce((a, e) => a + val(e) * q(e), 0);
+  const cards = entries.reduce((a, e) => a + q(e), 0);
+
+  const ranked = priced.map(e => ({ e, v: val(e) * q(e), unit: val(e) })).sort((a, b) => b.v - a.v);
+  const top5 = ranked.slice(0, 5).reduce((a, x) => a + x.v, 0);
+
+  const group = (keyOf) => {
+    const m = new Map();
+    for (const e of entries) {
+      const k = keyOf(e) || 'Unknown';
+      const g = m.get(k) || { label: k, value: 0, count: 0 };
+      g.value += (val(e) || 0) * q(e); g.count += q(e); m.set(k, g);
+    }
+    return [...m.values()].sort((a, b) => b.value - a.value || b.count - a.count);
+  };
+
+  const sets = new Map();
+  for (const e of entries) {
+    const k = e.setName || 'Unknown set';
+    const g = sets.get(k) || { label: k, value: 0, count: 0, nums: new Set(), total: null };
+    g.value += (val(e) || 0) * q(e); g.count += q(e);
+    if (e.number != null) g.nums.add(String(e.number));
+    if (e.setTotal) g.total = e.setTotal;
+    sets.set(k, g);
+  }
+  const bySet = [...sets.values()].map(g => ({ label: g.label, value: g.value, count: g.count, owned: g.nums.size, total: g.total,
+    pct: g.total ? Math.min(100, g.nums.size / g.total * 100) : null })).sort((a, b) => b.value - a.value);
+
+  const buckets = VALUE_BUCKETS.map(([lo, hi, label]) => ({ label, count: entries.filter(e => { const v = val(e); return v != null && v >= lo && v < hi; }).reduce((a, e) => a + q(e), 0) }));
+  buckets.push({ label: 'No price yet', count: entries.filter(e => val(e) == null).reduce((a, e) => a + q(e), 0) });
+
+  const months = new Map();
+  for (const e of entries) {
+    const d = new Date(e.addedAt || now);
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    months.set(k, (months.get(k) || 0) + q(e));
+  }
+  const added = [...months.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, count]) => ({ label, count }));
+
+  const sa = entries.map(e => ({ e, s: sinceAdded(e, rate) })).filter(x => x.s);
+  const gainers = sa.slice().sort((a, b) => b.s.abs * q(b.e) - a.s.abs * q(a.e)).filter(x => x.s.abs > 0.004);
+  const losers = sa.slice().sort((a, b) => a.s.abs * q(a.e) - b.s.abs * q(b.e)).filter(x => x.s.abs < -0.004);
+
+  return {
+    cards, unique: entries.length, value: total, converted, cost, gain: worthOfCosted - cost, gainPct: cost > 0 ? (worthOfCosted - cost) / cost * 100 : null,
+    priced: priced.length, unpriced: entries.length - priced.length,
+    avg: cards && priced.length ? total / priced.reduce((a, e) => a + q(e), 0) : null,
+    median: median(priced.flatMap(e => Array(q(e)).fill(val(e)))),
+    ranked, top5Share: total > 0 ? top5 / total * 100 : null,
+    byRarity: group(e => e.rarity), byGroup: group(e => e.group), byLanguage: group(e => ({ en: 'English', ja: 'Japanese', 'zh-tw': 'Chinese (Traditional)', 'zh-cn': 'Chinese (Simplified)' }[e.language || 'en'])),
+    byVariant: group(e => e.variant), bySet, buckets, added, gainers, losers,
+  };
+}
+
 // ---------- Pokémon names in English, Japanese and Chinese ----------
 
 /** "ミニリュウex" -> "ミニリュウ", "Pikachu ex" -> "Pikachu". A glued suffix only counts after a non-Latin letter. */
@@ -509,5 +673,6 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
+    DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }

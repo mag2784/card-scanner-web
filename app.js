@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '1.7';
+const APP_VERSION = '1.8';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -348,9 +348,26 @@ const store = {
         if (e.priceEurWhenAdded == null) e.priceEurWhenAdded = eurNow;
       }
       e.rarity = card.rarity || e.rarity;
+      e.group = card.group || e.group || null;
+      e.kind = card.kind || e.kind || null;
+      e.cm = { trend: card.cmTrend, avg1: card.cmAvg1, avg7: card.cmAvg7, avg30: card.cmAvg30 };
       e.priceUpdatedAt = now;
     }
+    this.recordHistory(now);
     this.save();
+  },
+
+  /** One price point per card and per binder per day, so trends can be drawn. Also refreshes the Cardmarket-based estimates. */
+  recordHistory(now = Date.now()) {
+    for (const c of this.collections) {
+      for (const e of c.cards) {
+        if (!(e.hist && e.hist.length) && e.priceWhenAdded != null) e.hist = [[e.addedAt || now, e.priceWhenAdded]];
+        const v = unitValue(e, fx.rate);
+        e.hist = pushPoint(e.hist, now, v);
+        if (e.cm) e.est = cmEstimate(now, v, e.cm);
+      }
+      c.hist = pushPoint(c.hist, now, total(c));
+    }
   },
   addBinder(name) {
     const c = { id: uid(), name, cards: [] };
@@ -1058,6 +1075,7 @@ function renderDetails() {
     openSheet(html);
     app.sheet = 'details';
   }
+  Analytics.bindDetails($('#overlay'));
 }
 
 function detailsHtml() {
@@ -1091,6 +1109,7 @@ function detailsHtml() {
     ${!d.loading && cmParts.length ? `<p style="margin:12px 0 0">Cardmarket (Europe): ${cmParts.join(', ')}</p>` : ''}
     ${!d.loading && card.priceSource ? `<p class="small muted" style="margin:4px 0 0">Price from ${esc(card.priceSource)}. TCGdex had none for this card.</p>`
       : !d.loading && card.tcgUpdated ? `<p class="small muted" style="margin:4px 0 0">TCGplayer prices from ${esc(card.tcgUpdated)}</p>` : ''}
+    ${d.loading || card.identified ? '' : Analytics.trendHtml(e, card)}
     <p style="margin:14px 0 0"><b>In ${esc(binderTitle(currentBinder().name))}: ${e.quantity}${e.variant ? ` (${esc(e.variant)})` : ''}</b></p>
     <div class="row" style="margin-top:18px">
       <a class="btn btn-outline grow" target="_blank" rel="noopener" href="https://www.tcgplayer.com/search/pokemon/product?q=${q}">TCGplayer</a>
@@ -1147,6 +1166,7 @@ function renderBinders() {
         ${conv.eur > 0 ? `<div class="bk-note">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
         ${eurNoRate > 0 ? `<div class="bk-note">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
       </section>
+      ${cur.cards.length ? '<button class="bk-analytics-btn" type="button" data-action="open-analytics"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Analytics and price trends</button>' : ''}
       <div id="bkStage" class="bk-stage"></div>
       ${cur.cards.length ? `
         <div class="bk-chips" role="group" aria-label="Sort the cards">${[['value', 'Value'], ['rarity', 'Rarity'], ['newest', 'Newest'], ['name', 'Name']].map(([k, l]) =>
@@ -1351,6 +1371,7 @@ document.addEventListener('click', async ev => {
     try { const reg = await navigator.serviceWorker.getRegistration(); if (reg) await reg.update(); } catch (e) { /* ignore */ }
     setTimeout(() => location.reload(), 600);
   }
+  else if (a === 'open-analytics') Analytics.open(currentBinder().id);
   else if (a === 'open-binders') openBinders();
   else if (a === 'close-binders') closeBinders();
   else if (a === 'binder') { app.binderId = el.dataset.id; app.rarity = null; app.bookOpened = false; app.bookPage = 1; app.bookFade = true; renderBinders(); maybeRefresh(); }
