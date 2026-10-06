@@ -1,0 +1,33 @@
+/* "Who's that Pokémon?" (game.js); the screen reuses the analytics screen's look (.an) */
+#game{z-index:42}
+.gm-play{display:block;width:100%;margin-top:12px;padding:15px;border-radius:16px;background:#FFD36B;color:#2A1A63;font:22px/1 var(--display,system-ui);box-shadow:0 6px 0 #C9962E}
+.gm-play:active{transform:translateY(3px);box-shadow:0 3px 0 #C9962E}
+.gm-need{color:#FFD36B;font-weight:700}
+.gm-best{font:46px/1 var(--display,system-ui);color:#3EE0A5;margin:4px 0 8px}
+.gm-top{margin:0;padding-left:0;list-style:none;display:grid;gap:4px}.gm-top li{font-size:16px}.gm-top li.me{color:#FFD36B;font-weight:700}
+.gm-top .muted{font-size:13px;margin-left:6px}
+.gm-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}
+.gm-head b{font:24px/1 var(--display,system-ui);color:#3EE0A5}
+.gm-timer{height:10px;border-radius:99px;background:rgba(255,255,255,.12);overflow:hidden;margin:6px 0 12px}
+.gm-timer span{display:block;height:100%;width:100%;border-radius:99px;background:linear-gradient(90deg,#FF8A9B,#FFD36B,#3EE0A5)}
+.gm-stage{display:flex;flex-direction:column;align-items:center}
+.gm-card{position:relative;height:min(52vh,560px);aspect-ratio:63/88;border-radius:4.5%/3.2%;overflow:hidden;background:#000;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.gm-card img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;-webkit-user-select:none;transition:filter .5s,transform .5s}
+.gm-peek{position:absolute;inset:0;display:grid;grid-template-columns:repeat(6,1fr);grid-template-rows:repeat(8,1fr)}
+.gm-peek i{background:#2A1F5C;border:1px solid #3B2E7A;transition:opacity .35s,transform .35s}
+.gm-peek i.off{opacity:0;transform:scale(.6)}
+.gm-card.shown .gm-peek i{opacity:0}
+.gm-namebar{position:absolute;left:0;right:0;top:0;height:11%;display:grid;place-items:center;background:#2A1F5C;color:#FFD36B;font:22px/1 var(--display,system-ui);letter-spacing:.2em}
+.gm-card.shown .gm-namebar{background:rgba(13,10,31,.86);letter-spacing:0}
+.gm-pts{position:absolute;left:0;right:0;top:42%;text-align:center;font:54px/1 var(--display,system-ui);color:#3EE0A5;text-shadow:0 3px 0 #0D0A1F,0 0 20px rgba(62,224,165,.6);pointer-events:none}
+.gm-pts:not(:empty){animation:gmPop .6s cubic-bezier(.2,1.6,.4,1)}
+@keyframes gmPop{from{transform:scale(.3);opacity:0}to{transform:scale(1);opacity:1}}
+.gm-hint{min-height:26px;margin:10px 0 2px;font-weight:700;color:#FFD36B;letter-spacing:.06em;text-align:center}
+.gm-choices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.gm-choices button{padding:15px 8px;border-radius:16px;background:#fff;color:#2A1A63;font:18px/1.15 var(--display,system-ui);box-shadow:0 5px 0 #BDB6E6}
+.gm-choices button:active{transform:translateY(3px);box-shadow:0 2px 0 #BDB6E6}
+.gm-choices button.right{background:#3EE0A5;box-shadow:0 5px 0 #1C9A6E;color:#0D2A20}
+.gm-choices button.wrong{background:#FF8A9B;box-shadow:0 5px 0 #C24A5E;color:#3A0A14}
+.gm-choices button:disabled:not(.right):not(.wrong){opacity:.5}
+.gm-final{text-align:center}.gm-final .gm-best{font-size:58px}
+@media (prefers-reduced-motion: reduce){.gm-card img,.gm-peek i{transition:none}.gm-pts:not(:empty){animation:none}}

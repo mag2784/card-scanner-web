@@ -760,6 +760,13 @@ function mergeHist(a, b) {
   return out.length > 400 ? out.slice(out.length - 400) : out;
 }
 
+/** Top-5 game scores from two copies: each [score, time] once, best first. */
+function mergeTop(a, b) {
+  const seen = new Set(), out = [];
+  for (const s of [...(a || []), ...(b || [])]) { if (!Array.isArray(s) || seen.has(s[1])) continue; seen.add(s[1]); out.push(s); }
+  return out.sort((x, y) => y[0] - x[0] || x[1] - y[1]).slice(0, 5);
+}
+
 /** One card from two copies (a = this phone's, b = the sheet's). */
 function mergeEntry(a, b) {
   if (!a) return b;
@@ -792,6 +799,8 @@ function mergeBinder(a, b, id) {
   const out = { ...b, ...a, id, name: useB ? b.name : a.name, cards: all.filter(e => qtyOf(e) > 0), dead: all.filter(e => qtyOf(e) <= 0 && e.qd) };
   const nameT = Math.max(a.nameT || 0, b.nameT || 0); if (nameT) out.nameT = nameT;
   const kid = ((b.kidT || 0) > (a.kidT || 0) ? b.kid : a.kid) || b.kid || a.kid;     // the newest choice of character
+  const best = Math.max(a.best || 0, b.best || 0); if (best) out.best = best;           // "Who's that Pokémon?" scores
+  const top = mergeTop(a.top, b.top); if (top.length) out.top = top;
   if (kid) out.kid = kid;
   const kidT = Math.max(a.kidT || 0, b.kidT || 0); if (kidT) out.kidT = kidT;
   const h = mergeHist(a.hist, b.hist); if (h.length) out.hist = h;
@@ -955,7 +964,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex,
-    findNumberTokens, bulkResolve, asPoint, normalizePoints, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
+    findNumberTokens, bulkResolve, asPoint, normalizePoints, mergeTop, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }

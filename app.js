@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.9';
+const APP_VERSION = '3.0';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -408,6 +408,16 @@ const store = {
   setKid(id, kid) {
     const c = this.collections.find(x => x.id === id);
     if (c) { c.kid = kid; c.kidT = Date.now(); this.save(); }
+  },
+  /** A finished "Who's that Pokémon?" game: keeps the best score and the top 5. */
+  recordScore(id, score) {
+    const c = this.collections.find(x => x.id === id);
+    if (!c) return { isBest: false, at: 0 };
+    const at = Date.now(), prev = c.best || 0;
+    c.top = mergeTop(c.top, [[score, at]]);
+    c.best = Math.max(prev, score);
+    this.save();
+    return { isBest: score > prev, at };
   },
   renameBinder(id, name) {
     const c = this.collections.find(x => x.id === id);
@@ -1289,6 +1299,7 @@ function renderBinders() {
         ${Celebrate.kids.map(k => `<button type="button" class="bk-kidbtn" data-action="pick-kid" data-kid="${k}" aria-pressed="${kidOf(cur) === k}" aria-label="${Celebrate.label(k)} character"><img src="${Celebrate.avatar(k)}" alt=""></button>`).join('')}
       </div>
       <button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-pokedex"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Pokédex${species.dex ? ` <span class="bk-dex-count">${binderDex(species.dex, cur).size} / ${species.dex.count}</span>` : ''}</button>
+      <button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-game"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5h.01"/></svg>Who's that Pokémon?${cur.best ? ` <span class="bk-dex-count">Best ${cur.best.toLocaleString('en-US')}</span>` : ''}</button>
       ${cur.cards.length ? '<button class="bk-analytics-btn" type="button" data-action="open-analytics"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Analytics and price trends</button>' : ''}
       <div id="bkStage" class="bk-stage"></div>
       ${cur.cards.length ? `
@@ -1525,6 +1536,7 @@ document.addEventListener('click', async ev => {
   else if (a === 'pick-kid') { store.setKid(currentBinder().id, el.dataset.kid); renderBinders(); }
   else if (a === 'open-analytics') Analytics.open(currentBinder().id);
   else if (a === 'open-pokedex') Pokedex.open(currentBinder().id);
+  else if (a === 'open-game') Game.open(currentBinder().id);
   else if (a === 'bulk-pick') { const f = $('#bulkFile'); if (f) f.click(); }
   else if (a === 'open-binders') openBinders();
   else if (a === 'close-binders') closeBinders();
