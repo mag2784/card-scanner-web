@@ -141,6 +141,8 @@ const Bulk = (() => {
     st.adding = true; render();
     let added = 0, top = null, priciest = null;
     const perBinder = new Map();
+    // each binder's Pokédex before, to tell which Pokémon are new
+    const dexBefore = new Map(species.dex ? store.collections.map(c => [c.id, new Set(binderDex(species.dex, c).keys())]) : []);
     for (const it of todo) {
       let card = chosenCard(it);
       if (!card) { try { [card] = await cardDetails(it.candidates.filter(b => b.id === it.chosenId)); } catch (e) { card = null; } }
@@ -160,7 +162,16 @@ const Bulk = (() => {
     const bid = [...perBinder.entries()].sort((a, b) => b[1] - a[1])[0];
     const b = bid ? binderOf(bid[0]) : null;
     toast(added ? `Added ${added} card${added === 1 ? '' : 's'}${perBinder.size === 1 && b ? ` to ${b.name}` : ''}` : "Nothing was added");
-    if (added && b) Celebrate.show({ kid: kidOf(b), card: top, tier: BinderUI.tierOf(top && top.rarity), count: added });
+    let line = null;
+    if (added && b && species.dex && dexBefore.has(b.id)) {
+      const had = dexBefore.get(b.id), now = binderDex(species.dex, b);
+      const fresh = [...now.keys()].filter(n => !had.has(n));
+      if (fresh.length) {
+        line = fresh.length > 1 ? `${fresh.length} new Pokédex entries!` : 'New Pokédex entry!';
+        setTimeout(() => toast(`New in the Pokédex: ${fresh.sort((x, y) => x - y).slice(0, 3).map(n => `#${Pokedex.pad(n)} ${species.dex.name(n)}`).join(', ')}${fresh.length > 3 ? ` and ${fresh.length - 3} more` : ''}`), 1200);
+      }
+    }
+    if (added && b) Celebrate.show({ kid: kidOf(b), card: top, tier: BinderUI.tierOf(top && top.rarity), count: added, line });
     if (app.view === 'binders') renderBinders();
   }
 

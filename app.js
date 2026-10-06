@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.8';
+const APP_VERSION = '2.9';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -259,12 +259,14 @@ for (const key of Object.keys(LANGS)) {
 
 /** Pokémon names in English / Japanese / Chinese (species.json), loaded once in the background. */
 const species = {
-  api: null, promise: null,
+  api: null, dex: null, promise: null,
   load() {
     if (!this.promise) {
       this.promise = fetch('species.json').then(r => r.json()).then(rows => {
         this.api = makeSpecies(rows);
+        this.dex = makeDex(rows);
         if (app.view === 'scan' && app.scan.state === 'results') renderDock();
+        if (app.view === 'binders') renderBinders();
         return this.api;
       }).catch(() => { this.promise = null; return null; });
     }
@@ -424,6 +426,27 @@ function cardValue(card, variant) {
   if (card.manualPrice != null) return card.manualPrice;
   const e = eurPrice(card);
   return e != null && fx.rate ? e * fx.rate : null;
+}
+
+/**
+ * Runs `add` (cards going into binder b) and says what changed in its Pokédex:
+ * { line } for the cheer ("New Pokédex entry!", "Kanto complete!"), { toast } with the names, { count, gen }.
+ */
+function pokedexNews(b, add) {
+  const dex = species.dex;
+  if (!dex || !b) { add(); return { count: 0 }; }
+  const had = new Set(binderDex(dex, b).keys());
+  add();
+  const now = binderDex(dex, store.collections.find(c => c.id === b.id) || b);
+  const fresh = [...now.keys()].filter(n => !had.has(n)).sort((x, y) => x - y);
+  if (!fresh.length) return { count: 0 };
+  const done = dex.gens.find(g => fresh.some(n => n >= g.from && n <= g.to) && (() => { for (let n = g.from; n <= g.to; n++) if (!now.has(n)) return false; return true; })());
+  const names = fresh.slice(0, 3).map(n => `#${Pokedex.pad(n)} ${dex.name(n)}`).join(', ') + (fresh.length > 3 ? ` and ${fresh.length - 3} more` : '');
+  return {
+    count: fresh.length, gen: done || null,
+    line: done ? `${done.region} complete!!` : fresh.length > 1 ? `${fresh.length} new Pokédex entries!` : 'New Pokédex entry!',
+    toast: `New in the Pokédex: ${names}`,
+  };
 }
 
 /** The character that cheers for a binder: the one chosen on the binder screen, else the two take turns by binder order. */
@@ -1265,6 +1288,7 @@ function renderBinders() {
         <span>Cheering character</span>
         ${Celebrate.kids.map(k => `<button type="button" class="bk-kidbtn" data-action="pick-kid" data-kid="${k}" aria-pressed="${kidOf(cur) === k}" aria-label="${Celebrate.label(k)} character"><img src="${Celebrate.avatar(k)}" alt=""></button>`).join('')}
       </div>
+      <button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-pokedex"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Pokédex${species.dex ? ` <span class="bk-dex-count">${binderDex(species.dex, cur).size} / ${species.dex.count}</span>` : ''}</button>
       ${cur.cards.length ? '<button class="bk-analytics-btn" type="button" data-action="open-analytics"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Analytics and price trends</button>' : ''}
       <div id="bkStage" class="bk-stage"></div>
       ${cur.cards.length ? `
@@ -1483,13 +1507,15 @@ document.addEventListener('click', async ev => {
   else if (a === 'add') {
     const card = s.cards.find(c => c.id === s.selectedId) || s.cards[0];
     const variant = card.prices[Math.min(s.variantIdx || 0, card.prices.length - 1)] || null;
-    store.add(el.dataset.binder, card, variant);
+    const before = store.collections.find(c => c.id === el.dataset.binder);
+    const dexNews = pokedexNews(before, () => store.add(el.dataset.binder, card, variant));
     buzz();
     Sounds.play(cardValue(card, variant));
     const b = store.collections.find(c => c.id === el.dataset.binder);
     toast(`Added to ${b ? b.name : 'binder'}`);
     renderDock();
-    Celebrate.show({ kid: kidOf(b), card, tier: BinderUI.tierOf(card.rarity) });
+    Celebrate.show({ kid: kidOf(b), card, tier: dexNews.gen ? 'sir' : BinderUI.tierOf(card.rarity), line: dexNews.line });
+    if (dexNews.toast) setTimeout(() => toast(dexNews.toast), 900);
   }
   else if (a === 'check-update') {
     toast('Checking for updates…');
@@ -1498,6 +1524,7 @@ document.addEventListener('click', async ev => {
   }
   else if (a === 'pick-kid') { store.setKid(currentBinder().id, el.dataset.kid); renderBinders(); }
   else if (a === 'open-analytics') Analytics.open(currentBinder().id);
+  else if (a === 'open-pokedex') Pokedex.open(currentBinder().id);
   else if (a === 'bulk-pick') { const f = $('#bulkFile'); if (f) f.click(); }
   else if (a === 'open-binders') openBinders();
   else if (a === 'close-binders') closeBinders();

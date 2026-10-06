@@ -65,7 +65,7 @@ const Celebrate = (() => {
    * @param anchor   the element whose top edge the kid peeks over (default: the result sheet)
    * @param z        stacking order of the kid (below the anchor)
    */
-  function show({ kid: kidKey, card, tier = 'common', count = 1, anchor = null, z = 3 }) {
+  function show({ kid: kidKey, card, tier = 'common', count = 1, anchor = null, z = 3, line: say = null }) {
     const el = anchor || document.getElementById('dock');
     const kid = KIDS[kidKey] ? kidKey : null;
     clearTimeout(timer);
@@ -80,7 +80,7 @@ const Celebrate = (() => {
     if (!kid) return;
 
     const k = KIDS[kid];
-    const line = count > 1 ? `${count} cards added!`
+    const line = say ? say : count > 1 ? `${count} cards added!`
       : (tier === 'common' || tier === 'uncommon') ? pick(LINES[tier]) : (Math.random() < .5 && card ? `${card.name}!!` : pick(LINES[tier]));
     const root = document.createElement('div');
     root.className = 'cele'; root.style.setProperty('--z', behind ? 3 : (z > 3 ? z : 55));

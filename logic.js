@@ -869,6 +869,70 @@ function makeSpecies(rows) {
   };
 }
 
+// ---------- Pokédex: which Pokémon a card shows ----------
+
+/** The nine generations, by Pokédex number. */
+const DEX_GENS = [
+  { n: 1, region: 'Kanto', from: 1, to: 151 }, { n: 2, region: 'Johto', from: 152, to: 251 },
+  { n: 3, region: 'Hoenn', from: 252, to: 386 }, { n: 4, region: 'Sinnoh', from: 387, to: 493 },
+  { n: 5, region: 'Unova', from: 494, to: 649 }, { n: 6, region: 'Kalos', from: 650, to: 721 },
+  { n: 7, region: 'Alola', from: 722, to: 809 }, { n: 8, region: 'Galar', from: 810, to: 905 },
+  { n: 9, region: 'Paldea', from: 906, to: 1025 },
+];
+
+/**
+ * Which Pokémon (Pokédex numbers) a card shows, from its name in English, Japanese or Chinese:
+ * "Team Rocket's Mewtwo ex" -> [150], "Pikachu & Zekrom-GX" -> [25, 644], "Mr. Mime" isn't "Mime Jr.",
+ * "ロケット団のミュウツーex" -> [150]. Trainer and Energy cards -> [].
+ */
+function makeDex(rows) {
+  const words = s => nameKey(s).replace(/♀/g, ' f ').replace(/♂/g, ' m ')
+    .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff]+/g, ' ').trim().split(' ').filter(Boolean);
+  const cjk = s => String(s || '').normalize('NFKC').toLowerCase().replace(/[\s・·.'’\-:]/g, '');
+  const byFirst = new Map(), local = [], names = [];
+  rows.forEach((r, i) => {
+    const n = i + 1;
+    names[n] = r[0];
+    const t = words(r[0]);
+    if (t.length) { if (!byFirst.has(t[0])) byFirst.set(t[0], []); byFirst.get(t[0]).push({ n, t }); }
+    for (const x of r.slice(1)) { const k = cjk(x); if (k) local.push({ n, k }); }
+  });
+  for (const list of byFirst.values()) list.sort((a, b) => b.t.length - a.t.length);    // "mr mime" before "mr"
+  local.sort((a, b) => b.k.length - a.k.length);                                        // ミュウツー before ミュウ
+  return {
+    count: rows.length,
+    gens: DEX_GENS,
+    name: n => names[n] || `#${n}`,
+    speciesOf(cardName, group) {
+      if (group && !/^pok/i.test(group)) return [];                                     // Trainer, Energy
+      const found = new Set();
+      const t = words(cardName);
+      for (let i = 0; i < t.length; i++) {
+        for (const sp of byFirst.get(t[i]) || []) {
+          if (sp.t.every((w, j) => t[i + j] === w)) { found.add(sp.n); i += sp.t.length - 1; break; }
+        }
+      }
+      let k = cjk(cardName);
+      if (/[^\x00-\x7f]/.test(k)) {
+        for (const sp of local) if (k.includes(sp.k)) { found.add(sp.n); k = k.split(sp.k).join('\u0000'); }
+      }
+      return [...found].sort((a, b) => a - b);
+    },
+  };
+}
+
+/** A binder's Pokédex: Pokédex number -> the binder's cards of that Pokémon. */
+function binderDex(dex, binder) {
+  const caught = new Map();
+  for (const e of (binder && binder.cards) || []) {
+    for (const n of dex.speciesOf(e.name, e.group)) {
+      if (!caught.has(n)) caught.set(n, []);
+      caught.get(n).push(e);
+    }
+  }
+  return caught;
+}
+
 /**
  * A card the database doesn't have (many Simplified Chinese sets are empty there). We still know what it is
  * from the name and the printed number, so it can go in a binder with no picture and a price you type.
@@ -890,7 +954,7 @@ if (typeof module !== 'undefined') {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
-    stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
+    stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex,
     findNumberTokens, bulkResolve, asPoint, normalizePoints, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
