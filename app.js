@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.7';
+const APP_VERSION = '2.8';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -455,8 +455,14 @@ const sync = {
 
   /** Web app URL from the Deploy dialog, or the full link (with ?key=) from the sheet's Setup tab. */
   parse(raw) {
-    // forgiving for typed links: spaces, a missing "https://", a capital first letter from the keyboard
-    let s = String(raw || '').replace(/\s+/g, '');
+    // forgiving for typed and copied links: spaces or line breaks from an email, <...> around it, words around it,
+    // a missing "https://", a capital first letter from the keyboard
+    const text = String(raw || '').trim();
+    const whole = text.match(/https?:\/\/script\.google\.com\/\S+?\/exec(?:\?key=[A-Za-z0-9_-]+)?/i);
+    let s = whole && /key=/.test(whole[0]) ? whole[0] : text.replace(/\s+/g, '');
+    const inside = s.match(/(?:https?:\/\/)?script\.google\.com\/[^<>"'\s]+/i);
+    if (inside) s = inside[0];
+    s = s.replace(/[.,;:!)\]]+$/, '');
     if (/^script\.google\.com\//i.test(s)) s = 'https://' + s;
     s = s.replace(/^https?:\/\/script\.google\.com\//i, 'https://script.google.com/');
     if (!s.startsWith('https://script.google.com/')) return null;
@@ -1395,7 +1401,10 @@ function openBackup(note) {
         <li>Copy the <b>Web app URL</b> (ends in <code>/exec</code>) and paste it below.</li>
       </ol>
       <form data-form="connect">
-        <input class="field" name="link" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="row" style="align-items:stretch">
+          <input class="field grow" name="link" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="min-width:0">
+          <button type="button" class="btn btn-outline" data-action="paste-link">Paste</button>
+        </div>
         <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">Connect</button>
       </form>
       <p class="small muted">Setting up a second phone, or reinstalled? Paste the link from the <b>Setup</b> tab of your sheet instead.</p>` : `
@@ -1518,6 +1527,21 @@ document.addEventListener('click', async ev => {
   else if (a === 'copy-script') {
     if (app.scriptText && await copyText(app.scriptText)) toast('Script copied. Paste it into Apps Script.');
     else window.open('apps-script.txt', '_blank');   // fallback: open it to copy by hand
+  }
+  else if (a === 'paste-link') {
+    // reads the clipboard directly, for browsers (like Silk on a kids' profile) without a long-press Paste
+    const input = document.querySelector('form[data-form=connect] input[name=link]');
+    if (!input) return;
+    let t = '';
+    try { t = await navigator.clipboard.readText(); } catch (e) {
+      toast("This browser didn't let the app read the clipboard. Tap the box, hold, and choose Paste.");
+      return;
+    }
+    if (!t || !t.trim()) { toast('The clipboard is empty. Copy the link first.'); return; }
+    const l = sync.parse(t);
+    if (!l) { input.value = t.trim(); toast("That isn't the sheet link. It starts with https://script.google.com/"); return; }
+    input.value = `${l.url}?key=${l.key}`;
+    if (input.form.requestSubmit) input.form.requestSubmit(); else input.form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
   }
   else if (a === 'show-qr') {
     const l = sync.link;
