@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '2.6';
+const APP_VERSION = '2.7';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -308,6 +308,7 @@ const store = {
     }
     this.lib.collections.forEach(c => { c.cards = c.cards || []; c.dead = c.dead || []; });
     this.lib.gone = this.lib.gone || {};
+    normalizePoints(this.lib);
   },
   get collections() { return this.lib.collections; },
   save(push = true) {
@@ -316,7 +317,7 @@ const store = {
   },
   /** Use this library as the phone's own (restoring from the sheet, or the result of a merge). */
   replaceLib(lib) {
-    this.lib = { collections: (lib.collections || []).map(c => ({ ...c, cards: c.cards || [], dead: c.dead || [] })), gone: lib.gone || {} };
+    this.lib = normalizePoints({ collections: (lib.collections || []).map(c => ({ ...c, cards: c.cards || [], dead: c.dead || [] })), gone: lib.gone || {} });
     if (!this.lib.collections.length) this.lib.collections.push({ id: uid(), name: 'My binder', cards: [], dead: [] });
     this.save(false);
   },
@@ -474,7 +475,7 @@ const sync = {
     try { reply = JSON.parse(text); } catch (e) {
       throw new Error(/<html/i.test(text)
         ? 'The script isn\'t published for "Anyone". Check the deployment settings.'
-        : `Unexpected reply from the sheet (HTTP ${res.status}).`);
+        : `Unexpected reply from the sheet (HTTP ${res.status}): "${text.trim().slice(0, 100)}"`);
     }
     if (!reply.ok) throw new Error(reply.error || 'The sheet refused the request.');
     return reply;

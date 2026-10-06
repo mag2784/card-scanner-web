@@ -734,9 +734,22 @@ function bumpQty(e, delta, dev, now) {
   return e;
 }
 
+/** A history point as [time, price] (or [time, price, 1] for an estimate). Older Android versions wrote {t, v, est}. */
+const asPoint = p => (Array.isArray(p) ? p : p && typeof p === 'object' ? (p.est ? [p.t, p.v, 1] : [p.t, p.v]) : p);
+
+/** Every history in the binders in [time, price] form (reading what older Android versions saved). */
+function normalizePoints(lib) {
+  const fix = h => (Array.isArray(h) ? h.map(asPoint).filter(p => Array.isArray(p) && isFinite(p[0]) && isFinite(p[1])) : h);
+  for (const c of (lib && lib.collections) || []) {
+    if (c.hist) c.hist = fix(c.hist);
+    for (const e of [...(c.cards || []), ...(c.dead || [])]) { if (e.hist) e.hist = fix(e.hist); if (e.est) e.est = fix(e.est); }
+  }
+  return lib;
+}
+
 /** Two price histories in one: every point once, oldest first, at most one real reading per ~6 hours. */
 function mergeHist(a, b) {
-  const all = [...(a || []), ...(b || [])].sort((x, y) => x[0] - y[0]);
+  const all = [...(a || []), ...(b || [])].map(asPoint).filter(Array.isArray).sort((x, y) => x[0] - y[0]);
   const out = [];
   for (const p of all) {
     const last = out[out.length - 1];
@@ -878,7 +891,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey,
-    findNumberTokens, bulkResolve, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
+    findNumberTokens, bulkResolve, asPoint, normalizePoints, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }
