@@ -67,7 +67,7 @@
     .chip { color: #fff; background: rgba(0,0,0,.65); font-weight: 700; padding: 8px 16px; border-radius: 999px; max-width: 92%; text-align: center; }
     #scan-view.has-sheet .segmented, #scan-view.has-sheet .chip { display: none; }
 
-    #finder { position: absolute; left: 50%; top: 44%; width: min(72vw, 52vh * 63 / 88); aspect-ratio: 63 / 88; transform: translate(-50%, -50%); z-index: 2; pointer-events: none; }
+    #finder { position: absolute; left: 50%; top: 46%; width: min(64vw, 46vh * 63 / 88); aspect-ratio: 63 / 88; transform: translate(-50%, -50%); z-index: 2; pointer-events: none; }
     #finder i { position: absolute; width: 18%; aspect-ratio: 1; border: 6px solid #fff; transition: border-color .25s; }
     #finder i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 20px; }
     #finder i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 20px; }
@@ -76,6 +76,25 @@
     #finder.locked i { border-color: #3EE0A5; }
     #finder .scanline { position: absolute; left: 12px; right: 12px; height: 3px; border-radius: 3px; background: #E8336E; box-shadow: 0 -18px 28px 6px rgba(232,51,110,.28); animation: sweep 1.6s linear infinite alternate; }
     #finder.locked .scanline { display: none; }
+    #finder { transition: width .35s, top .35s, aspect-ratio .35s; }
+    #finder.stage-number { top: 50%; width: min(86vw, 560px); aspect-ratio: 3 / 1; }
+    #finder.stage-number i { width: 14%; aspect-ratio: auto; height: 42%; }
+    #finder .finder-tip { display: none; position: absolute; top: 100%; left: -10%; right: -10%; margin: 14px 0 0; text-align: center; color: #fff; font-weight: 700; font-size: 15px; line-height: 1.35; text-shadow: 0 2px 8px rgba(0,0,0,.8); }
+    #finder.stage-number .finder-tip { display: block; }
+    #finder.got i, #finder.flash i { border-color: #3EE0A5; }
+    #finder.flash { animation: finderPop .45s ease-out; }
+    @keyframes finderPop { 40% { transform: translate(-50%, -50%) scale(1.04); } }
+    #finder.got .scanline { display: none; }
+    .steps { display: flex; gap: 8px; align-items: center; justify-content: center; flex-wrap: wrap; max-width: 94%; }
+    .step { display: inline-flex; align-items: center; gap: 7px; color: #fff; background: rgba(0,0,0,.65); font-weight: 700; font-size: 15px; padding: 6px 13px 6px 6px; border-radius: 999px; max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .step .tick { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.2); font-size: 13px; }
+    .step.now { box-shadow: 0 0 0 2px #FFD36B; }
+    .step.done { box-shadow: 0 0 0 2px #3EE0A5; }
+    .step.done .tick { background: #3EE0A5; color: #0D2A20; }
+    .step-x { opacity: .6; margin-left: 2px; font-size: 18px; line-height: 1; }
+    .step-skip { color: #fff; font-weight: 700; font-size: 14px; padding: 6px 12px; border-radius: 999px; border: 2px solid rgba(255,255,255,.6); background: rgba(0,0,0,.4); }
+    #scan-view.has-sheet .steps { display: none; }
+    @media (prefers-reduced-motion: reduce) { #finder, #finder.flash { transition: none; animation: none; } }
     #scan-view.has-sheet #finder { display: none; }
     @keyframes sweep { from { top: 4%; } to { top: 96%; } }
 
@@ -180,7 +199,7 @@
   <section id="scan-view">
     <video id="video" playsinline muted autoplay></video>
     <div id="dim"></div>
-    <div id="finder" aria-hidden="true"><i></i><i></i><i></i><i></i><div class="scanline"></div></div>
+    <div id="finder" aria-hidden="true"><i></i><i></i><i></i><i></i><div class="scanline"></div><p class="finder-tip">Fill this box with the number<br>at the bottom of the card (like 152/128)</p></div>
     <div id="camera-msg" hidden>
       <p id="camera-msg-text">The camera reads the card's name and number.</p>
       <button class="btn btn-primary" data-action="start-camera">Turn on camera</button>
@@ -192,6 +211,7 @@
       </div>
       <div id="lang-switch" class="segmented" role="group" aria-label="Card language"></div>
       <div id="live" class="chip" aria-live="polite"><b class="lang-tag">EN</b>Point at a card</div>
+      <div id="steps" class="steps" hidden></div>
     </header>
     <div id="dock" class="sheet"></div>
   </section>

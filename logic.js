@@ -130,6 +130,20 @@ function nameScore(cardName, seen) {
 }
 
 /** Picks the candidate whose name best matches the seen text, or null if unsure. */
+/**
+ * Two-stage scan: the name was read first, then the collector number up close. Which card is it?
+ *   { cards, chosen, exact } - show these, with `chosen` first
+ *   null                     - none of this number's cards has that name: search by name and number instead
+ */
+function decideTwoStage(found, name, evidence) {
+  const cards = (found && found.cards) || [];
+  if (!cards.length || cards.length > 40) return null;
+  const agrees = cards.filter(c => nameScore(c.name, [name]) >= 0.8);
+  if (!agrees.length) return null;
+  const chosen = agrees.length === 1 ? agrees[0] : (pickCandidate(agrees, [name, ...(evidence || [])]) || agrees[0]);
+  return { cards: [chosen, ...agrees.filter(c => c !== chosen)], chosen, exact: !!found.setMatched };
+}
+
 function pickCandidate(cands, seen) {
   if (cands.length === 1) return cands[0];
   if (!cands.length || !seen.length) return null;
@@ -961,7 +975,7 @@ const isIdentified = id => String(id || '').startsWith('manual|');
 if (typeof module !== 'undefined') {
   module.exports = {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
-    pickCandidate, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
+    pickCandidate, decideTwoStage, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex,
     findNumberTokens, bulkResolve, asPoint, normalizePoints, mergeTop, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,

@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '3.0';
+const APP_VERSION = '3.1';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -622,12 +622,12 @@ const camera = {
       });
       video.srcObject = this.stream;
       await video.play();
-      this.on = true;
+      this.on = true; renderSteps();
       $('#camera-msg').hidden = true;
       const track = this.stream.getVideoTracks()[0];
       try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) { /* optional */ }
     } catch (e) {
-      this.on = false;
+      this.on = false; renderSteps();
       $('#camera-msg-text').textContent = e && e.name === 'NotAllowedError'
         ? 'Camera access is off. Allow it in your browser settings, then tap the button.'
         : 'The camera reads the card\'s name and number.';
@@ -637,7 +637,7 @@ const camera = {
   stop() {
     if (this.stream) this.stream.getTracks().forEach(t => t.stop());
     this.stream = null;
-    this.on = false;
+    this.on = false; renderSteps();
   },
 };
 
@@ -702,6 +702,10 @@ function grabCrops() {
     enhance(g, c.width, c.height);
     return c;
   };
+  if (two.stage !== 'name') {                            // stage 2: the whole small box is the number
+    const number = strip(0.0, 0.0, 1.0, 1.0, 1200);
+    return number ? { number } : null;
+  }
   const name = strip(0.0, 0.0, 0.82, 0.16, 800);
   const number = strip(0.0, 0.82, 1.0, 1.0, 1000);
   return name && number ? { name, number } : null;
@@ -715,6 +719,84 @@ function readFrom(numData, nameData) {
   if (!lines.length) lines = String(nameData.text || '').split('\n').map(t => ({ text: t.trim(), h: 0 })).filter(l => l.text);
   lines.sort((a, b) => b.h - a.h);   // the name is the tallest text
   return { number: hit && hit.number, total: hit && hit.total, nameLines: lines.map(l => l.text) };
+}
+
+// ---------- two-stage scan: name first (green check), then the number up close (green check), then search ----------
+const two = { stage: 'name', name: null, number: null, total: null, numVotes: [], since: 0 };
+
+function resetTwo() {
+  Object.assign(two, { stage: 'name', name: null, number: null, total: null, numVotes: [], since: 0 });
+  renderSteps();
+}
+
+/** The name is in: green check, and the viewfinder becomes a small box for the number. */
+function lockName(name) {
+  Object.assign(two, { stage: 'number', name, number: null, total: null, numVotes: [], since: Date.now() });
+  buzz();
+  flashFinder();
+  setLive('Now move closer to the number at the bottom');
+  renderSteps();
+}
+
+function flashFinder() {
+  const f = $('#finder'); f.classList.remove('flash'); void f.offsetWidth; f.classList.add('flash');
+}
+
+function onNumberRead(text) {
+  if (app.scan.state !== 'scanning' || app.view !== 'scan' || two.stage !== 'number') return;
+  const hit = parseNumber(text);
+  push(two.numVotes, hit ? `${hit.number}|${hit.total || ''}` : null, 4);
+  const win = winnerOf(two.numVotes);
+  if (!win) {
+    setLive(hit ? `Reading #${hit.number}${hit.total ? '/' + hit.total : ''}…` : 'Fill the box with the number at the bottom of the card');
+    return;
+  }
+  const [number, totalRaw] = win.split('|');
+  Object.assign(two, { stage: 'done', number, total: totalRaw || null });
+  buzz();
+  flashFinder();
+  renderSteps();
+  setLive(`Got #${number}${two.total ? '/' + two.total : ''}! Looking it up…`);
+  setTimeout(finishTwo, 450);               // a moment to see both green checks
+}
+
+function finishTwo() {
+  if (app.scan.state !== 'scanning' || two.stage !== 'done') return;
+  const cat = catalogs[app.lang].data;
+  const { name, number, total } = two;
+  const numberText = total ? `#${number}/${total}` : `#${number}`;
+  const read = { name, number, total };
+  const d = cat ? decideTwoStage(cat.candidates(number, total), name, votes.evidence) : null;
+  if (d) return showCandidates(d.cards, d.chosen, d.exact, numberText, read);
+  return search(read);
+}
+
+/** Searching with just the name, when the number won't read. */
+function skipNumber() {
+  if (!two.name) return;
+  const name = two.name;
+  two.stage = 'done';
+  search({ name, number: null, total: null });
+}
+
+/** The two steps under the status pill: the name, then the number, each turning green. */
+function renderSteps() {
+  const el = $('#steps');
+  if (!el) return;
+  const on = app.view === 'scan' && app.scan.state === 'scanning' && camera.on;
+  el.hidden = !on;
+  $('#finder').classList.toggle('stage-number', on && two.stage !== 'name');
+  $('#finder').classList.toggle('got', on && two.stage === 'done');
+  if (!on) return;
+  const tick = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>';
+  const nameDone = !!two.name, numDone = two.stage === 'done' && !!two.number;
+  const nameStep = nameDone
+    ? `<button type="button" class="step done" data-action="reset-name" aria-label="Name found: ${esc(two.name)}. Tap to read the name again"><span class="tick">${tick}</span>${esc(two.name)}<span class="step-x" aria-hidden="true">×</span></button>`
+    : `<span class="step now"><span class="tick">1</span>Name</span>`;
+  const numStep = numDone
+    ? `<span class="step done"><span class="tick">${tick}</span>#${esc(two.number)}${two.total ? '/' + esc(two.total) : ''}</span>`
+    : `<span class="step${nameDone ? ' now' : ''}"><span class="tick">2</span>Number</span>`;
+  el.innerHTML = nameStep + numStep + (nameDone && !numDone ? '<button type="button" class="step-skip" data-action="skip-number">Skip number</button>' : '');
 }
 
 // ---------- number-first locking with voting ----------
@@ -757,9 +839,9 @@ function onRead(read) {
   }
 
   if (!win) {
-    setLive(strong ? `Reading: ${strong}` : 'Point at a card');
+    if (strong) return lockName(strong);      // stage 1 done: green check, then the number up close
+    setLive('Point at a card');
     votes.framesNoNumber++;
-    if (strong && votes.framesNoNumber >= 6) search({ name: strong, number: null, total: null });
     return;
   }
   votes.framesNoNumber = 0;
@@ -866,6 +948,13 @@ async function scanLoop() {
       await ocr.ready(app.lang);
       const crops = grabCrops();
       if (!crops) { await sleep(200); continue; }
+      if (two.stage === 'done') { await sleep(150); continue; }
+      if (two.stage === 'number') {                      // only the number now: faster reads
+        if (!crops.number) { await sleep(150); continue; }
+        const num = await ocr.numberWorker.recognize(crops.number);
+        onNumberRead(num.data.text);
+        continue;
+      }
       const [num, name] = await Promise.all([
         ocr.numberWorker.recognize(crops.number),
         ocr.nameWorker.recognize(crops.name),
@@ -889,9 +978,10 @@ function setLive(text) {
 function setScan(s) {
   if (s.state === 'results' && app.scan.state !== 'results') buzz();
   app.scan = s;
-  if (s.state === 'scanning') { resetVotes(); setLive(''); }
+  if (s.state === 'scanning') { resetVotes(); resetTwo(); setLive(''); }
   if (s.state === 'results') kickBackup(s.cards.find(c => c.id === s.selectedId));
   renderDock();
+  renderSteps();
 }
 
 function renderLang() {
@@ -939,7 +1029,7 @@ function renderDock() {
 
   if (s.state === 'scanning') {
     dock.innerHTML = `
-      <p class="muted" style="margin:0 0 12px">Fit the card inside the corners. Keep the name and the number at the bottom sharp.</p>
+      <p class="muted" style="margin:0 0 12px">Get a green check on the name, then move close to the number.</p>
       <form class="row" data-form="search">
         <input class="field grow" name="q" placeholder="${app.lang === 'en' ? 'Name and number, e.g. Pikachu 28/131' : 'English name or number, e.g. Dragonair 91/129'}" autocomplete="off" enterkeyhint="search">
         <button class="btn btn-primary" type="submit">Search</button>
@@ -1495,6 +1585,8 @@ document.addEventListener('click', async ev => {
     catalogs[app.lang].load().catch(() => {});
   }
   else if (a === 'rescan') setScan({ state: 'scanning' });
+  else if (a === 'reset-name') { resetVotes(); resetTwo(); setLive('Point at the card name'); }
+  else if (a === 'skip-number') skipNumber();
   else if (a === 'edit-read') { s.editing = true; renderDock(); }
   else if (a === 'edit-read-cancel') { s.editing = false; renderDock(); }
   else if (a === 'variant' && app.detail) { app.detail.variantIdx = Number(el.dataset.i); renderDetails(); }
