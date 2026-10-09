@@ -761,6 +761,28 @@ function normalizePoints(lib) {
   return lib;
 }
 
+/** A view-only link's hash: "#view=<base64url of {u: script URL, c: view code}>". */
+function makeViewHash(url, code) {
+  const b = b64url(JSON.stringify({ u: url, c: code }));
+  return '#view=' + b;
+}
+function b64url(s) {
+  const bytes = new TextEncoder().encode(s);
+  let bin = ''; for (const x of bytes) bin += String.fromCharCode(x);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+/** The script URL and view code from a view-only link's hash, or null. */
+function parseViewHash(hash) {
+  const m = /^#?view=([A-Za-z0-9_-]+)/.exec(String(hash || ''));
+  if (!m) return null;
+  try {
+    const bin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const j = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0))));
+    if (!j || typeof j.u !== 'string' || !j.u.startsWith('https://script.google.com/') || typeof j.c !== 'string' || j.c.length < 12) return null;
+    return { url: j.u, code: j.c };
+  } catch (e) { return null; }
+}
+
 /** Two price histories in one: every point once, oldest first, at most one real reading per ~6 hours. */
 function mergeHist(a, b) {
   const all = [...(a || []), ...(b || [])].map(asPoint).filter(Array.isArray).sort((x, y) => x[0] - y[0]);
@@ -996,7 +1018,7 @@ if (typeof module !== 'undefined') {
     pickCandidate, decideTwoStage, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
     stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex, allPokemonPool,
-    findNumberTokens, bulkResolve, asPoint, normalizePoints, mergeTop, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
+    findNumberTokens, bulkResolve, asPoint, normalizePoints, mergeTop, makeViewHash, parseViewHash, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
 }

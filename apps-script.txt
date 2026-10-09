@@ -6,6 +6,8 @@
  *
  * Setup: Extensions > Apps Script, paste this whole file over the sample code, save,
  * then Deploy > New deployment > Web app (Execute as: Me, Who has access: Anyone).
+ * Updating it later: paste the new code, save, then Deploy > Manage deployments > Edit (pencil) > Version: New version
+ * > Deploy. That keeps the same link.
  * Copy the Web app URL (ends in /exec) into the app: Binders > Back up.
  */
 
@@ -15,6 +17,7 @@ const SYNC_CODE = '';
 
 const DATA_TAB = '_data';     // hidden tab with the raw collection (used for restores)
 const SETUP_TAB = 'Setup';
+const SCRIPT_VERSION = 2;   // 2: view-only links
 const CHUNK = 40000;          // characters per cell (Sheets allows 50,000)
 
 function doPost(e) {
@@ -24,6 +27,7 @@ function doPost(e) {
   } catch (err) {
     return reply({ ok: false, error: 'Bad request' });
   }
+  if (req.action === 'view') return handleView(req);           // view-only links: no sync code, read-only
   if (!codeOk(req.key)) return reply({ ok: false, error: 'Wrong sync code. Use the link from the Setup tab of your sheet.' });
 
   const lock = LockService.getScriptLock();
@@ -33,6 +37,7 @@ function doPost(e) {
       writeSetup();
       return reply({ ok: true, library: loadLibrary() });
     }
+    if (req.action === 'shareView' || req.action === 'stopView' || req.action === 'viewStatus') return handleShare(req);
     if (req.action === 'save') {
       saveLibrary(req.library);
       writeBinderTabs(req.library);
@@ -59,6 +64,63 @@ function codeOk(key) {
 
 function currentCode() {
   return SYNC_CODE || PropertiesService.getScriptProperties().getProperty('SYNC_CODE') || '';
+}
+
+// ---------- View-only links (family can look at chosen binders, but not change them) ----------
+// The owner's app asks for a view code with the sync code ("shareView"); the view link carries only the view code,
+// which can read the chosen binders and nothing else. "stopView" turns the link off.
+
+function viewSettings() {
+  const props = PropertiesService.getScriptProperties();
+  let binders = [];
+  try { binders = JSON.parse(props.getProperty('VIEW_BINDERS') || '[]'); } catch (err) { binders = []; }
+  return { code: props.getProperty('VIEW_CODE') || '', binders: binders };
+}
+
+function newCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let s = '';
+  for (let i = 0; i < 24; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+  return s;
+}
+
+/** The chosen binders, without the bookkeeping the viewer doesn't need. */
+function viewLibrary(binders) {
+  const lib = loadLibrary() || { collections: [] };
+  const want = {};
+  binders.forEach(function (id) { want[id] = true; });
+  return {
+    collections: (lib.collections || []).filter(function (c) { return want[c.id]; }).map(function (c) {
+      return {
+        id: c.id, name: c.name, kid: c.kid || null, hist: c.hist || null, best: c.best || null, bestAll: c.bestAll || null,
+        cards: (c.cards || []).map(function (e) { const o = {}; Object.keys(e).forEach(function (k) { if (k !== 'qd') o[k] = e[k]; }); return o; }),
+      };
+    }),
+  };
+}
+
+function handleView(req) {
+  const v = viewSettings();
+  if (!v.code || req.view !== v.code) return reply({ ok: false, error: 'This view link has been turned off. Ask for a new one.' });
+  return reply({ ok: true, library: viewLibrary(v.binders) });
+}
+
+function handleShare(req) {
+  const props = PropertiesService.getScriptProperties();
+  if (req.action === 'viewStatus') {
+    const v = viewSettings();
+    return reply({ ok: true, view: v.code || null, binders: v.binders });
+  }
+  if (req.action === 'stopView') {
+    props.deleteProperty('VIEW_CODE');
+    return reply({ ok: true, view: null, binders: [] });
+  }
+  // shareView: { binders: [ids], fresh: true for a new link (the old one stops working) }
+  const v = viewSettings();
+  const code = v.code && !req.fresh ? v.code : newCode();
+  props.setProperty('VIEW_CODE', code);
+  props.setProperty('VIEW_BINDERS', JSON.stringify((req.binders || []).map(String)));
+  return reply({ ok: true, view: code, binders: req.binders || [] });
 }
 
 function doGet() {

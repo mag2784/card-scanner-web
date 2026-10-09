@@ -228,7 +228,8 @@ const Analytics = (() => {
     const b = ev.target.closest('[data-an]'); if (!b) return;
     const k = b.dataset.an, v = b.dataset.v;
     if (k === 'close') close();
-    else if (k === 'refresh') { await refreshPrices(st.id); if (!$('#analytics').hidden) render(); }
+    else if (k === 'refresh') {
+      if (app.viewOnly) return; await refreshPrices(st.id); if (!$('#analytics').hidden) render(); }
     else if (k === 'tab') { st.tab = v; render(); }
     else if (k === 'range') { st.range = Number(v); render(); }
     else if (k === 'moves') { st.moves = Number(v); render(); }

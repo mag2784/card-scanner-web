@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '3.2';
+const APP_VERSION = '3.3';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -314,6 +314,7 @@ const store = {
   },
   get collections() { return this.lib.collections; },
   save(push = true) {
+    if (app.viewOnly) return;                  // a view-only link never touches this device's own binders
     try { localStorage.setItem('library', JSON.stringify(this.lib)); } catch (e) { toast("Couldn't save on this phone."); }
     if (push) sync.schedule();
   },
@@ -521,13 +522,13 @@ const sync = {
     return reply;
   },
   schedule() {
-    if (!this.link) return;
+    if (!this.link || app.viewOnly) return;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.sync(), 2000);
   },
   /** Syncs when the app opens, when it comes back to the front, and every few minutes while it is open. */
   start() {
-    if (this.started || !this.link) return;
+    if (this.started || !this.link || app.viewOnly) return;
     this.started = true;
     this.sync();
     setInterval(() => { if (!document.hidden) this.sync(); }, 3 * 60 * 1000);
@@ -597,6 +598,7 @@ const sync = {
 // ---------- app state ----------
 const app = {
   lang: LANGS[localStorage.getItem('lang')] ? localStorage.getItem('lang') : 'en',
+  viewOnly: parseViewHash(location.hash),          // opened from a view-only link: { url, code }
   view: 'scan',
   scan: { state: 'scanning' },
   binderId: null,
@@ -1217,16 +1219,17 @@ function entrySheetHTML(e) {
     <div class="bk-price-row"><span class="bk-big">${esc(priceText(e))}</span>${delta ? `<span class="${delta.up ? 'bk-up' : 'bk-down'}">${delta.text}</span>` : ''}</div>
     <p class="bk-sub">${esc(more)}</p>
     ${e.priceManual ? '<p class="bk-sub" style="margin-top:6px">This is a price you entered. It is replaced automatically once a price site has one.</p>' : ''}
-    ${e.price == null || e.priceManual ? `<button class="bk-link" type="button" data-bk="price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
+    ${app.viewOnly ? '' : e.price == null || e.priceManual ? `<button class="bk-link" type="button" data-bk="price">${e.priceManual ? 'Change my price' : 'Enter a price yourself'}</button>` : ''}
     <div class="bk-qty-row"><span>In ${esc(binderTitle(cur.name))}</span>
-      <div class="bk-step"><button type="button" data-bk="qty-" aria-label="One less" ${e.quantity <= 1 ? 'disabled' : ''}>−</button><b>${e.quantity}</b><button type="button" data-bk="qty+" aria-label="One more">+</button></div></div>
+      ${app.viewOnly ? `<b>×${e.quantity}</b>` : `<div class="bk-step"><button type="button" data-bk="qty-" aria-label="One less" ${e.quantity <= 1 ? 'disabled' : ''}>−</button><b>${e.quantity}</b><button type="button" data-bk="qty+" aria-label="One more">+</button></div>`}</div>
     <div class="bk-btns"><button class="bk-btn out" type="button" data-bk="flip">Flip card</button><button class="bk-btn out" type="button" data-bk="details">Card details</button></div>
     <div class="bk-btns" style="margin-top:10px"><button class="bk-btn pri" type="button" data-bk="close">Back to binder</button></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><button class="bk-link danger" type="button" data-bk="remove">Remove from binder</button><span class="bk-tip" style="margin:0">Drag the card to tilt it.</span></div>`;
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">${app.viewOnly ? '<span></span>' : '<button class="bk-link danger" type="button" data-bk="remove">Remove from binder</button>'}<span class="bk-tip" style="margin:0">Drag the card to tilt it.</span></div>`;
 }
 
 function entryAction(act, e) {
   const cur = currentBinder();
+  if (app.viewOnly && act !== 'details') return;
   if (act === 'details') return openCardDetails(e);
   if (act === 'qty+' || act === 'qty-') {
     const q = e.quantity + (act === 'qty+' ? 1 : -1);
@@ -1340,6 +1343,14 @@ function detailsHtml() {
 function renderBinders() {
   const view = $('#binders-view');
   const cols = store.collections;
+  if (app.viewOnly && (app.viewError || !cols.length)) {
+    view.innerHTML = `<div class="bk-stars" aria-hidden="true"></div><div class="bk-app">
+      <h1 class="bk-title">Binders</h1>
+      <p class="bk-view-wait">${esc(app.viewError || 'No binders are shared on this link yet.')}</p>
+      <button class="bk-link" type="button" data-action="view-exit">Open the card scanner instead</button></div>`;
+    return;
+  }
+  const vo = !!app.viewOnly;
   const cur = currentBinder();
   const idx = cols.indexOf(cur);
   const color = BINDER_COLORS[idx % BINDER_COLORS.length];
@@ -1369,13 +1380,13 @@ function renderBinders() {
     <div class="bk-stars" aria-hidden="true"></div>
     <div class="bk-app">
       <header class="bk-top">
-        <button class="bk-backbtn" type="button" data-action="close-binders"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to scanner</span></button>
-        <button class="bk-pill" type="button" data-action="open-backup">${sync.link ? 'Backed up' : 'Back up'}</button>
+        ${vo ? '<span class="bk-view-tag"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Just looking</span>' : `<button class="bk-backbtn" type="button" data-action="close-binders"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to scanner</span></button>
+        <button class="bk-pill" type="button" data-action="open-backup">${sync.link ? 'Backed up' : 'Back up'}</button>`}
       </header>
       <h1 class="bk-title">Binders</h1>
       <div class="bk-tabs" role="group" aria-label="Choose a binder">
         ${cols.map(c => `<button class="bk-tab" type="button" data-action="binder" data-id="${esc(c.id)}" aria-pressed="${c.id === cur.id}">${esc(c.name)}</button>`).join('')}
-        <button class="bk-tab bk-new" type="button" data-action="new-binder" aria-label="Add a binder">+ New</button>
+        ${vo ? '' : '<button class="bk-tab bk-new" type="button" data-action="new-binder" aria-label="Add a binder">+ New</button>'}
       </div>
       <section class="bk-worth" aria-live="polite">
         <div class="bk-worth-row">
@@ -1385,12 +1396,12 @@ function renderBinders() {
         ${conv.eur > 0 ? `<div class="bk-note">Includes about ${usd(conv.usd)} converted from ${eur(conv.eur)} (cards with only European prices)</div>` : ''}
         ${eurNoRate > 0 ? `<div class="bk-note">Plus ${eur(eurNoRate)} in cards with only European prices</div>` : ''}
       </section>
-      <div class="bk-kidpick" role="group" aria-label="Cheering character">
+      ${vo ? '' : `<div class="bk-kidpick" role="group" aria-label="Cheering character">
         <span>Cheering character</span>
         ${Celebrate.kids.map(k => `<button type="button" class="bk-kidbtn" data-action="pick-kid" data-kid="${k}" aria-pressed="${kidOf(cur) === k}" aria-label="${Celebrate.label(k)} character"><img src="${Celebrate.avatar(k)}" alt=""></button>`).join('')}
-      </div>
+      </div>`}
       <button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-pokedex"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Pokédex${species.dex ? ` <span class="bk-dex-count">${binderDex(species.dex, cur).size} / ${species.dex.count}</span>` : ''}</button>
-      <button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-game"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5h.01"/></svg>Who's that Pokémon?${cur.best ? ` <span class="bk-dex-count">Best ${cur.best.toLocaleString('en-US')}</span>` : ''}</button>
+      ${vo ? '' : `<button class="bk-analytics-btn bk-dex-btn" type="button" data-action="open-game"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5h.01"/></svg>Who's that Pokémon?${cur.best ? ` <span class="bk-dex-count">Best ${cur.best.toLocaleString('en-US')}</span>` : ''}</button>`}
       ${cur.cards.length ? '<button class="bk-analytics-btn" type="button" data-action="open-analytics"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Analytics and price trends</button>' : ''}
       <div id="bkStage" class="bk-stage"></div>
       ${cur.cards.length ? `
@@ -1400,13 +1411,13 @@ function renderBinders() {
           <button class="bk-chip" type="button" data-action="rarity" data-r="" aria-pressed="${!app.rarity}">All ${n}</button>
           ${rarityChips.map(([r, c]) => `<button class="bk-chip" type="button" data-action="rarity" data-r="${esc(r)}" aria-pressed="${app.rarity === r}">${esc(r)} ${c}</button>`).join('')}
         </div>` : ''}
-      <div class="bk-manage">
+      ${vo ? `<div class="bk-manage"><span>Prices updated ${timeAgo(oldest)}. You're just looking: only the binder's owner can change it.</span></div>` : `<div class="bk-manage">
         ${cur.cards.length ? `${app.refreshing ? '<div class="bk-spin" aria-label="Updating prices"></div>' : '<button class="bk-link" type="button" data-action="refresh">Refresh prices</button>'}
           <span>TCGplayer market prices, updated ${timeAgo(oldest)}</span>` : ''}
         ${app.refreshMsg ? `<span style="color:var(--bk-rose)">${esc(app.refreshMsg)}</span>` : ''}
         <button class="bk-link" type="button" data-action="rename-binder">Rename</button>
         ${cols.length > 1 ? '<button class="bk-link danger" type="button" data-action="delete-binder">Delete binder</button>' : ''}
-      </div>
+      </div>`}
     </div>`;
 
   BinderUI.render($('#bkStage'), {
@@ -1416,7 +1427,7 @@ function renderBinders() {
     page: app.bookPage, opened: app.bookOpened, fade: app.bookFade,
     emptyMessage: list.length ? '' : cur.cards.length
       ? '<b>No cards here</b><span>Pick a different rarity below.</span>'
-      : `<b>${esc(binderTitle(cur.name))} is empty</b><span>Scan a card, then tap Add to ${esc(cur.name)}.</span>`,
+      : vo ? `<b>${esc(binderTitle(cur.name))} is empty</b><span>No cards yet.</span>` : `<b>${esc(binderTitle(cur.name))} is empty</b><span>Scan a card, then tap Add to ${esc(cur.name)}.</span>`,
     priceTag: priceText,
     onPage: p => { app.bookPage = p; },
     onOpened: () => { app.bookOpened = true; },
@@ -1538,10 +1549,88 @@ function openBackup(note) {
         <button class="btn btn-primary grow" data-action="sync-now">Sync now</button>
         <button class="btn btn-outline grow" data-action="restore">Restore</button>
       </div>
+      <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="open-share">Share a view-only link with family</button>
       <button class="btn btn-outline btn-block" style="margin-top:10px" data-action="show-qr">Show QR code for another device</button>
       <button class="text-btn" data-action="copy-link">Copy sync link for another phone</button>
       <button class="text-btn danger" data-action="disconnect">Disconnect this phone</button>`}
     <button class="btn btn-outline btn-block" style="margin-top:8px" data-action="close-sheet">Close</button>`);
+}
+
+// ---------- view-only links: family can look at chosen binders but not change them ----------
+const VIEW_BLOCKED = new Set(['add', 'new-binder', 'rename-binder', 'delete-binder', 'pick-kid', 'refresh', 'open-backup',
+  'open-game', 'manual-price', 'bulk-pick', 'close-binders', 'sync-now', 'restore', 'disconnect', 'open-share', 'rescan']);
+
+/** Opening a view-only link: binders come from the sheet, live, and nothing on this device is changed. */
+async function startViewing() {
+  document.body.classList.add('view-only');
+  store.lib = { collections: [], gone: {} };
+  $('#scan-view').hidden = true;
+  app.view = 'binders';
+  $('#binders-view').hidden = false;
+  $('#binders-view').innerHTML = '<div class="bk-app"><p class="bk-view-wait">Opening the binders…</p></div>';
+  fx.init();
+  species.load();
+  await loadViewed(true);
+  setInterval(() => { if (!document.hidden) loadViewed(false); }, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadViewed(false); });
+}
+
+async function loadViewed(first) {
+  const v = app.viewOnly;
+  try {
+    const res = await fetch(v.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'view', view: v.code }) });
+    const r = JSON.parse(await res.text());
+    if (!r.ok) throw new Error(r.error || 'The link stopped working.');
+    const cols = (r.library && r.library.collections) || [];
+    store.lib = normalizePoints({ collections: cols.map(c => ({ ...c, cards: c.cards || [], dead: [] })), gone: {} });
+    app.viewError = null;
+  } catch (e) {
+    if (!first && store.collections.length) return;          // keep showing what we have
+    app.viewError = /Unknown action/i.test(e.message || '') ? "This link needs an update to the binders' sheet." : (e.message || "Couldn't open the binders.");
+  }
+  renderBinders();
+}
+
+/** The owner's side, on the Back up screen: choose binders, make or copy the link, or turn it off. */
+async function openShare(note) {
+  const l = sync.link;
+  if (!l) return openBackup();
+  app.sheet = { type: 'share' };
+  openSheet('<h2 class="display">Share a view-only link</h2><p class="muted">Checking…</p>');
+  let st = null, err = null;
+  try { st = await sync.call(l, { action: 'viewStatus' }); } catch (e) { err = e.message || 'Could not reach the sheet.'; }
+  if (app.sheet == null || app.sheet.type !== 'share') return;
+  if (err && /Unknown action/i.test(err)) {
+    openSheet(`<h2 class="display">Update the sheet's script first</h2>
+      <p>View-only links need the newest script in your Google Sheet. One-time, about 3 minutes, easiest on a computer:</p>
+      <ol class="steps">
+        <li><button class="text-btn" data-action="copy-script" style="padding:0">Copy the new script</button>.</li>
+        <li>Open your binders sheet, then <b>Extensions › Apps Script</b>. Select everything in the editor, delete it, paste, and save.</li>
+        <li><b>Deploy › Manage deployments</b>, tap the pencil, set <b>Version</b> to <b>New version</b>, and tap <b>Deploy</b>. (Not "New deployment": that would change the link.)</li>
+        <li>Come back here and tap <b>Share a view-only link</b> again.</li>
+      </ol>
+      <button class="btn btn-outline btn-block" data-action="open-backup">Back</button>`);
+    if (!app.scriptText) fetch('apps-script.txt').then(r => r.text()).then(t => { app.scriptText = t; }).catch(() => {});
+    return;
+  }
+  if (err) { openBackup(err); return; }
+  const on = !!st.view, chosen = new Set(on ? st.binders : store.collections.map(c => c.id));
+  const url = on ? `${location.origin}${location.pathname}${makeViewHash(l.url, st.view)}` : '';
+  app.shareUrl = url;
+  openSheet(`<h2 class="display">Share a view-only link</h2>
+    <p class="muted">Family can look at the binders you pick: the pages, the cards, the Pokédex and what they're worth. They can't add, change or remove anything.</p>
+    ${note ? `<p><b>${esc(note)}</b></p>` : ''}
+    <form data-form="share">
+      <p style="margin:12px 0 6px"><b>Binders they can see</b></p>
+      ${store.collections.map(c => `<label class="share-row"><input type="checkbox" name="b" value="${esc(c.id)}" ${chosen.has(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}
+      <button class="btn btn-primary btn-block" style="margin-top:12px" type="submit">${on ? 'Save which binders' : 'Make the link'}</button>
+    </form>
+    ${on ? `<div class="tile" style="margin-top:14px;word-break:break-all;font-size:13px">${esc(url)}</div>
+      <button class="btn btn-primary btn-block" style="margin-top:10px" data-action="share-copy">Copy the link</button>
+      <p class="small muted">Anyone with this link can see these binders, including the kids' names and what the cards are worth, so only send it to family.</p>
+      <button class="text-btn" data-action="share-new">Make a new link (the old one stops working)</button>
+      <button class="text-btn danger" data-action="share-off">Turn the link off</button>` : ''}
+    <button class="btn btn-outline btn-block" style="margin-top:8px" data-action="open-backup">Back</button>`);
 }
 
 /** Another phone's changes just arrived: redraw whatever is showing. */
@@ -1574,6 +1663,7 @@ document.addEventListener('click', async ev => {
     return;
   }
   const a = el.dataset.action;
+  if (app.viewOnly && VIEW_BLOCKED.has(a)) return;
   const s = app.scan;
 
   if (a === 'start-camera') camera.start();
@@ -1675,6 +1765,21 @@ document.addEventListener('click', async ev => {
     input.value = `${l.url}?key=${l.key}`;
     if (input.form.requestSubmit) input.form.requestSubmit(); else input.form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
   }
+  else if (a === 'open-share') openShare();
+  else if (a === 'share-copy') { if (app.shareUrl && await copyText(app.shareUrl)) toast('Link copied. Send it to family.'); }
+  else if (a === 'share-off' || a === 'share-new') {
+    if (a === 'share-off' && !confirm('Turn the link off? Anyone who has it will no longer see the binders.')) return;
+    if (a === 'share-new' && !confirm('Make a new link? The old link stops working.')) return;
+    try {
+      if (a === 'share-off') await sync.call(sync.link, { action: 'stopView' });
+      else {
+        const st = await sync.call(sync.link, { action: 'viewStatus' });
+        await sync.call(sync.link, { action: 'shareView', binders: st.binders, fresh: true });
+      }
+      openShare(a === 'share-off' ? 'The link is off.' : 'New link made. The old one no longer works.');
+    } catch (e) { toast(e.message || "Couldn't reach the sheet."); }
+  }
+  else if (a === 'view-exit') { location.href = location.pathname; }
   else if (a === 'show-qr') {
     const l = sync.link;
     if (!l) return;
@@ -1744,6 +1849,12 @@ document.addEventListener('submit', async ev => {
     const name = String(f.get('cardname') || '').trim(), num = String(f.get('cardnumber') || '').trim(), tot = String(f.get('cardtotal') || '').trim();
     if (!name && !num) { toast('Type a name or a card number'); return; }
     runTypedSearch({ name: name || null, number: num ? normalizeNumber(num) : null, total: tot ? normalizeNumber(tot) : null });
+  } else if (form.dataset.form === 'share') {
+    const binders = [...form.querySelectorAll('input[name=b]:checked')].map(i => i.value);
+    if (!binders.length) { toast('Pick at least one binder.'); return; }
+    const btn = form.querySelector('button[type=submit]'); btn.disabled = true; btn.textContent = 'Saving…';
+    try { await sync.call(sync.link, { action: 'shareView', binders }); openShare('Saved. Copy the link and send it to family.'); }
+    catch (e) { btn.disabled = false; btn.textContent = 'Try again'; toast(e.message || "Couldn't reach the sheet."); }
   } else if (form.dataset.form === 'connect') {
     const btn = form.querySelector('button');
     btn.disabled = true; btn.textContent = 'Connecting…';
@@ -1763,15 +1874,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------- start ----------
-store.init();
-sync.start();
-if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-fx.init();
-renderLang();
-renderDock();
-camera.start();
-catalogs[app.lang].load().catch(() => {});
-setTimeout(() => species.load(), 1200);
+if (app.viewOnly) startViewing();
+else {
+  store.init();
+  sync.start();
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  fx.init();
+  renderLang();
+  renderDock();
+  camera.start();
+  catalogs[app.lang].load().catch(() => {});
+  setTimeout(() => species.load(), 1200);
+}
 scanLoop();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -226,3 +226,8 @@
   .bk-stars,.bk-sigil .r1,.bk-sigil .r2,.bk-rays,.bk-open-hint,.bk-emblem,.bk-book.bk-fade{animation-duration:.01ms !important;animation-iteration-count:1 !important}
   #bkSummon *,#bkSummon *::before{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;transition-delay:0s !important}
 }
+
+/* view-only links (app.js: startViewing) */
+.bk-view-tag{display:inline-flex;align-items:center;gap:8px;color:#fff;font-weight:700;background:rgba(255,255,255,.12);border-radius:999px;padding:8px 14px}
+.bk-view-wait{color:#CFC9F2;text-align:center;margin:30vh 16px 14px;font-size:17px}
+.view-only [data-an="refresh"]{display:none}
