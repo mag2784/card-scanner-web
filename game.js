@@ -6,11 +6,13 @@
  *   peek   - tiles come off the card one by one
  *   zoom   - starts zoomed into one small part and zooms out
  * The printed name stays covered; hints show its first letters part way through.
- * Scores are kept on the binder (best + top 5), so they sync like the cards do.
+ * Two modes: "My binder" (the binder's own Pokémon) and "All Pokémon" (any Pokémon from the whole card list).
+ * Scores are kept on the binder (best + top 5, separately per mode), so they sync like the cards do.
  */
 const Game = (() => {
   const ROUNDS = 10, SECONDS = 12, CELLS = 48, MODES = ['shadow', 'peek', 'zoom'];
-  const st = { id: null, phase: 'start', rounds: [], i: 0, score: 0, correct: 0, t0: 0, raf: 0, answered: false, timer: 0, last: null };
+  let allPool = null;                                         // "All Pokémon": Pokédex number -> cards, built once
+  const st = { mode: (() => { try { return localStorage.getItem('gameMode') === 'all' ? 'all' : 'binder'; } catch (e) { return 'binder'; } })(), id: null, phase: 'start', rounds: [], i: 0, score: 0, correct: 0, t0: 0, raf: 0, answered: false, timer: 0, last: null };
   const binder = () => store.collections.find(c => c.id === st.id);
   const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
   const fmt = n => n.toLocaleString('en-US');
@@ -26,6 +28,35 @@ const Game = (() => {
       if (pics.length) out.set(n, pics);
     }
     return out;
+  }
+
+  const keys = () => (st.mode === 'all' ? ['bestAll', 'topAll'] : ['best', 'top']);
+
+  /** The whole English card list as a game pool (downloads it the first time). */
+  async function loadAll() {
+    if (allPool) return allPool;
+    const cat = await catalogs.en.load();
+    allPool = allPokemonPool(species.dex, cat.cards);
+    return allPool;
+  }
+
+  /** "All Pokémon": 10 random Pokémon from the whole card list; the wrong answers come from the same generation. */
+  function makeAllRounds() {
+    const dex = species.dex, p = allPool, have = [...p.keys()];
+    const modes = shuffle([...MODES, ...MODES, ...MODES, ...MODES]);
+    return shuffle(have.slice()).slice(0, ROUNDS).map((n, k) => {
+      const list = p.get(n), b = list[Math.floor(Math.random() * list.length)];
+      const g = dex.gens.find(x => n >= x.from && n <= x.to), others = [];
+      while (others.length < 3) {
+        const r = g.from + Math.floor(Math.random() * (g.to - g.from + 1));
+        if (r !== n && !others.includes(r)) others.push(r);
+      }
+      return {
+        n, e: { name: b.name }, img: `${b.image}/high.png`, mode: modes[k],
+        choices: shuffle([n, ...others]), cells: shuffle([...Array(CELLS).keys()]),
+        origin: `${Math.round(25 + Math.random() * 50)}% ${Math.round(18 + Math.random() * 20)}%`,
+      };
+    });
   }
 
   function makeRounds(c) {
@@ -55,18 +86,23 @@ const Game = (() => {
 
   // ---------- screens ----------
   function startHtml(c) {
-    const dex = species.dex, n = dex ? pool(c).size : 0, av = Celebrate.avatar(kidOf(c));
-    const top = (c.top || []).map((s, i) => `<li><b>${i + 1}.</b> ${fmt(s[0])} <span class="muted">${new Date(s[1]).toLocaleDateString()}</span></li>`).join('');
+    const dex = species.dex, n = dex ? pool(c).size : 0, av = Celebrate.avatar(kidOf(c)), all = st.mode === 'all';
+    const [bk, tk] = keys();
+    const top = (c[tk] || []).map((s, i) => `<li><b>${i + 1}.</b> ${fmt(s[0])} <span class="muted">${new Date(s[1]).toLocaleDateString()}</span></li>`).join('');
     return `<div class="an-wrap gm-start">
       <header class="an-top"><button class="an-back" data-gm="close">‹ Binder</button></header>
       <h1 class="an-title">${av ? `<img class="av" src="${av}" alt="">` : ''}Who's that Pokémon?</h1>
-      <div class="an-card">
-        <p>A card from ${esc(binderTitle(c.name))} is hidden. Pick its name as fast as you can: quick answers score up to 1,000 points.</p>
-        <p class="muted small">10 rounds. Shadows get their colour back, tiles come off, or the picture zooms out, a little more every second.</p>
-        ${n >= 4 ? `<button class="gm-play" data-gm="play">Play</button>`
-          : `<p class="gm-need">You need at least 4 different Pokémon cards with pictures in this binder to play (it has ${n}).</p>`}
+      <div class="gm-modes" role="group" aria-label="Which Pokémon">
+        <button type="button" data-gm="mode" data-v="binder" aria-pressed="${!all}">My binder</button>
+        <button type="button" data-gm="mode" data-v="all" aria-pressed="${all}">All Pokémon</button>
       </div>
-      <div class="an-card"><h3>Best scores</h3>${c.best ? `<div class="gm-best">${fmt(c.best)}</div><ol class="gm-top">${top}</ol>` : '<p class="muted">No games yet. Be the first!</p>'}</div>
+      <div class="an-card">
+        <p>${all ? 'A card of any Pokémon, from every set, is hidden.' : `A card from ${esc(binderTitle(c.name))} is hidden.`} Pick its name as fast as you can: quick answers score up to 1,000 points.</p>
+        <p class="muted small">10 rounds. Shadows get their colour back, tiles come off, or the picture zooms out, a little more every second.${all ? ' Tricky: the other answers are Pokémon from the same region.' : ''}</p>
+        ${all || n >= 4 ? `<button class="gm-play" data-gm="play">Play</button>`
+          : `<p class="gm-need">You need at least 4 different Pokémon cards with pictures in this binder to play (it has ${n}). Try All Pokémon!</p>`}
+      </div>
+      <div class="an-card"><h3>Best scores${all ? ': All Pokémon' : ''}</h3>${c[bk] ? `<div class="gm-best">${fmt(c[bk])}</div><ol class="gm-top">${top}</ol>` : '<p class="muted">No games yet. Be the first!</p>'}</div>
     </div>`;
   }
 
@@ -91,12 +127,13 @@ const Game = (() => {
 
   function endHtml(c, res) {
     const av = Celebrate.avatar(kidOf(c));
-    const top = (c.top || []).map((s, i) => `<li class="${s[1] === res.at ? 'me' : ''}"><b>${i + 1}.</b> ${fmt(s[0])}</li>`).join('');
+    const [bk, tk] = keys();
+    const top = (c[tk] || []).map((s, i) => `<li class="${s[1] === res.at ? 'me' : ''}"><b>${i + 1}.</b> ${fmt(s[0])}</li>`).join('');
     return `<div class="an-wrap gm-end">
       <header class="an-top"><button class="an-back" data-gm="close">‹ Binder</button></header>
       <h1 class="an-title">${av ? `<img class="av" src="${av}" alt="">` : ''}${res.isBest ? 'New best score!' : 'Nice playing!'}</h1>
       <div class="an-card gm-final"><div class="gm-best">${fmt(st.score)}</div>
-        <p>${st.correct} of ${st.rounds.length} right${res.isBest ? '' : ` · best ${fmt(c.best)}`}</p>
+        <p>${st.correct} of ${st.rounds.length} right${res.isBest ? '' : ` · best ${fmt(c[bk])}`}${st.mode === 'all' ? ' · All Pokémon' : ''}</p>
         <button class="gm-play" data-gm="play">Play again</button></div>
       <div class="an-card"><h3>Best scores</h3><ol class="gm-top">${top}</ol></div>
     </div>`;
@@ -156,7 +193,7 @@ const Game = (() => {
   function finish() {
     st.phase = 'end';
     const c = binder(); if (!c) { close(); return; }
-    const res = store.recordScore(c.id, st.score);
+    const res = store.recordScore(c.id, st.score, st.mode === 'all');
     $('#game').innerHTML = endHtml(binder(), res);
     if (res.isBest && st.score > 0) { Celebrate.show({ kid: kidOf(c), card: null, tier: 'sir', line: 'New best score!', z: 50 }); Sounds.play(99); }
   }
@@ -170,9 +207,20 @@ const Game = (() => {
     const c = binder(); if (!c) { close(); return; }
     el.innerHTML = startHtml(c);
   }
-  function play() {
+  async function play() {
     const c = binder(); if (!c || !species.dex) return;
-    st.rounds = makeRounds(c); st.i = 0; st.score = 0; st.correct = 0; st.phase = 'round';
+    if (st.mode === 'all') {
+      if (!allPool) {
+        const btn = $('#game [data-gm=play]'); if (btn) { btn.disabled = true; btn.textContent = 'Getting the card list…'; }
+        try { await loadAll(); } catch (e) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Play'; }
+          toast("Couldn't download the card list. Check the internet and try again."); return;
+        }
+        if ($('#game').hidden || st.mode !== 'all') return;
+      }
+      st.rounds = makeAllRounds();
+    } else st.rounds = makeRounds(c);
+    st.i = 0; st.score = 0; st.correct = 0; st.phase = 'round';
     if (st.rounds.length < 4) { open(st.id); return; }
     beginRound();
   }
@@ -185,6 +233,7 @@ const Game = (() => {
     if (k === 'close') close();
     else if (k === 'quit') { stop(); open(st.id); }
     else if (k === 'play') play();
+    else if (k === 'mode') { st.mode = b.dataset.v; try { localStorage.setItem('gameMode', st.mode); } catch (e) { /* private mode */ } open(st.id); }
     else if (k === 'pick') answer(Number(b.dataset.n));
   });
 

@@ -31,3 +31,6 @@
 .gm-choices button:disabled:not(.right):not(.wrong){opacity:.5}
 .gm-final{text-align:center}.gm-final .gm-best{font-size:58px}
 @media (prefers-reduced-motion: reduce){.gm-card img,.gm-peek i{transition:none}.gm-pts:not(:empty){animation:none}}
+.gm-modes{display:flex;gap:8px;margin:2px 0 4px}
+.gm-modes button{flex:1;padding:11px 6px;border-radius:999px;background:rgba(255,255,255,.1);color:#fff;font-weight:700;font-size:15px}
+.gm-modes button[aria-pressed=true]{background:#fff;color:#2A1A63;box-shadow:0 0 0 2px #FFD36B}

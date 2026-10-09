@@ -1,7 +1,7 @@
 'use strict';
 /* Card Scanner (web): camera + OCR, results, binders and Google Sheet backup. Uses logic.js. */
 
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 const BINDER_COLORS = ['#E8336E', '#2F6BFF', '#00875A', '#E07A00', '#7A4DFF', '#0097A7'];
 const CATALOG_MAX_AGE = 3 * 24 * 3600 * 1000;   // re-download card lists every 3 days
 const PRICE_MAX_AGE = 12 * 3600 * 1000;         // refresh binder prices every 12 hours
@@ -410,12 +410,13 @@ const store = {
     if (c) { c.kid = kid; c.kidT = Date.now(); this.save(); }
   },
   /** A finished "Who's that Pokémon?" game: keeps the best score and the top 5. */
-  recordScore(id, score) {
+  recordScore(id, score, all = false) {
     const c = this.collections.find(x => x.id === id);
     if (!c) return { isBest: false, at: 0 };
-    const at = Date.now(), prev = c.best || 0;
-    c.top = mergeTop(c.top, [[score, at]]);
-    c.best = Math.max(prev, score);
+    const [bk, tk] = all ? ['bestAll', 'topAll'] : ['best', 'top'];   // "All Pokémon" mode keeps its own scores
+    const at = Date.now(), prev = c[bk] || 0;
+    c[tk] = mergeTop(c[tk], [[score, at]]);
+    c[bk] = Math.max(prev, score);
     this.save();
     return { isBest: score > prev, at };
   },

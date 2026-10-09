@@ -815,6 +815,8 @@ function mergeBinder(a, b, id) {
   const kid = ((b.kidT || 0) > (a.kidT || 0) ? b.kid : a.kid) || b.kid || a.kid;     // the newest choice of character
   const best = Math.max(a.best || 0, b.best || 0); if (best) out.best = best;           // "Who's that Pokémon?" scores
   const top = mergeTop(a.top, b.top); if (top.length) out.top = top;
+  const bestAll = Math.max(a.bestAll || 0, b.bestAll || 0); if (bestAll) out.bestAll = bestAll;   // ...in All Pokémon mode
+  const topAll = mergeTop(a.topAll, b.topAll); if (topAll.length) out.topAll = topAll;
   if (kid) out.kid = kid;
   const kidT = Math.max(a.kidT || 0, b.kidT || 0); if (kidT) out.kidT = kidT;
   const h = mergeHist(a.hist, b.hist); if (h.length) out.hist = h;
@@ -944,6 +946,22 @@ function makeDex(rows) {
   };
 }
 
+/**
+ * "All Pokémon" game mode: Pokédex number -> cards from the whole card list that show only that Pokémon and have a
+ * picture. [briefs] is the card list ({ id, name, image }).
+ */
+function allPokemonPool(dex, briefs) {
+  const out = new Map();
+  for (const b of briefs || []) {
+    if (!b || !b.image || !b.name) continue;
+    const ns = dex.speciesOf(b.name);
+    if (ns.length !== 1) continue;                        // "Pikachu & Zekrom-GX" would be ambiguous
+    if (!out.has(ns[0])) out.set(ns[0], []);
+    out.get(ns[0]).push(b);
+  }
+  return out;
+}
+
 /** A binder's Pokédex: Pokédex number -> the binder's cards of that Pokémon. */
 function binderDex(dex, binder) {
   const caught = new Map();
@@ -977,7 +995,7 @@ if (typeof module !== 'undefined') {
     LANGS, isCjk, hasCjk, lev, normalizeNumber, parseNumber, tidyNumberText, isHeaderWord, nameScore,
     pickCandidate, decideTwoStage, parseQuery, buildCatalog, nameFromLine, toCard, eurPrice, marketPrice, pickTier, rarityRank,
     normSet, pickGroups, pickProduct, pricesForProduct, ptcgPrices, ptcgQuery, parseMoney, subtypeLabel,
-    stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex,
+    stripCardSuffix, makeSpecies, identifiedCard, isIdentified, nameKey, DEX_GENS, makeDex, binderDex, allPokemonPool,
     findNumberTokens, bulkResolve, asPoint, normalizePoints, mergeTop, PRICE_COPY, expandGroups, expandGroupCopy, stableStringify, qtyOf, bumpQty, mergeHist, mergeEntry, mergeBinder, mergeLibraries,
     DAY, pushPoint, priceAt, cmEstimate, fullHist, unitValue, movement, sinceAdded, holdingsSeries, binderAnalytics,
   };
